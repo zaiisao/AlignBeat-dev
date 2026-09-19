@@ -7,12 +7,12 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from alignbeat.inference.decode import decode  # noqa: E402
-from alignbeat.inference.stitching import fragment_offsets, stitch_candidates  # noqa: E402
+from alignbeat.inference.stitching import get_fragment_offsets, predict_and_stitch_fragments  # noqa: E402
 
 
 def stitch_piece(mel, model, window, border=None, tau=0.5):
     """Stitch then decode, which is what the pipeline does."""
-    class_logits, frames, _fragment = stitch_candidates(mel, model, window, border)
+    class_logits, frames, _fragment = predict_and_stitch_fragments(mel, model, window, border)
     return decode(class_logits, frames, tau=tau)
 from alignbeat.constants import CLASS_BACKGROUND, CLASS_BEAT, CLASS_DOWNBEAT
 
@@ -23,7 +23,7 @@ def test_keep_regions_partition_exactly():
         for window, border in ((1280, 8), (1280, 64), (500, 10)):
             if total < window:
                 continue
-            fragments = fragment_offsets(total, window, border)
+            fragments = get_fragment_offsets(total, window, border)
             assert fragments[0][1] == 0, "first fragment must keep down to 0"
             assert fragments[-1][2] == total, "last fragment must keep up to the end"
             for (_, _, end), (_, start, _) in zip(fragments, fragments[1:]):
@@ -36,7 +36,7 @@ def test_keep_regions_partition_exactly():
 
 def test_border_must_be_under_half_window():
     try:
-        fragment_offsets(1000, 100, 50)
+        get_fragment_offsets(1000, 100, 50)
     except ValueError as exc:
         assert "border" in str(exc)
         print("ok: a border >= half the window is rejected")
@@ -69,7 +69,7 @@ def test_every_event_reported_exactly_once():
     # the keep regions tile [0, total) - so the count must equal the number of distinct
     # candidate positions falling inside the piece.
     expected = 0
-    for offset, keep_start, keep_end in fragment_offsets(total, window, border):
+    for offset, keep_start, keep_end in get_fragment_offsets(total, window, border):
         positions = offset + (torch.arange(1, num_candidates + 1).float() / num_candidates) * window
         # mirror the stitcher: interior seams half-open, last fragment inclusive so a
         # detection exactly at the piece end is kept, not dropped

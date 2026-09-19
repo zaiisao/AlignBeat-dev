@@ -169,7 +169,7 @@ def _elapsed_beats(times, half, max_advance):
     is how a missed detection costs one transition instead of inverting the phase for
     everything after it."""
     period = _local_period(times, half).clamp_min(1e-9)
-    gaps = times[1:] - times[:-1]
+    gaps = times[1:] - times[:-1] # JA: gaps is the sequence of inter-beat intervals
     return (gaps / period).round().clamp(1, max_advance).long()
 
 
@@ -248,6 +248,8 @@ def _duration_classes(p, event_times, meter_prior, eps, max_advance, period_wind
         # up to it. The head names a downbeat or a beat and cannot say which beat of the
         # bar, so every other offset carries the beat probability.
         downbeat_offset = (-cumulative) % meter
+        # JA: Builds the Viterbi emission matrix which has one row per hidden state and
+        # one column per event
         emission = np.tile(beat_probability, (meter, 1))
         emission[downbeat_offset, np.arange(len(event_times))] = downbeat_probability
 

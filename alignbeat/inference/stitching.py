@@ -2,24 +2,24 @@
 import torch
 
 
-def fragment_offsets(total_frames, fragment_frames, border_frames):
+def get_fragment_offsets(total_frames, fragment_size, border_size):
     """Offsets o_1 = 0, o_2 = D - 2*beta, ... covering [0, total_frames)."""
-    if fragment_frames <= 2 * border_frames:
+    if fragment_size <= 2 * border_size:
         raise ValueError(
-            f"border_frames {border_frames} must be under half the window "
-            f"{fragment_frames}; otherwise consecutive fragments cannot meet")
+            f"border_size {border_size} must be under half the window "
+            f"{fragment_size}; otherwise consecutive fragments cannot meet")
 
-    stride = fragment_frames - 2 * border_frames
+    stride = fragment_size - 2 * border_size
     offsets = []
     offset = 0
     while True:
         offsets.append(offset)
-        if offset + fragment_frames >= total_frames:
+        if offset + fragment_size >= total_frames:
             break
         offset += stride
 
-    if len(offsets) > 1 and total_frames - offsets[-1] < fragment_frames:
-        offsets[-1] = total_frames - fragment_frames
+    if len(offsets) > 1 and total_frames - offsets[-1] < fragment_size:
+        offsets[-1] = total_frames - fragment_size
 
     fragments = []
     covered_to = 0
@@ -29,45 +29,38 @@ def fragment_offsets(total_frames, fragment_frames, border_frames):
         # JA: offset + border_frames is the first beta frames of the fragment B.
         # offset + fragment_frames - border_frames is the last beta frames of the
         # fragment A.
-        keep_start = 0 if first else max(offset + border_frames, covered_to)
-        keep_end = total_frames if last else offset + fragment_frames - border_frames
+        keep_start = 0 if first else max(offset + border_size, covered_to)
+        keep_end = total_frames if last else offset + fragment_size - border_size
         keep_end = max(keep_end, keep_start)
         covered_to = keep_end
         fragments.append((offset, keep_start, keep_end))
     return fragments
 
 
-def _forward_fragments(mel, model, fragment_frames, border_frames):
+
+def _get_fragment_batch(mel, model, fragment_offsets, fragment_size, border_size):
     """Run the model over the overlapping fragments covering one piece.
 
     Section 9.3 leaves the border beta free but recommends tying it to the candidate
     spacing D/N rather than to something outside the architecture: one cell is the
     resolution at which this head can place an event at all.
     """
-    if border_frames is None:
-        border_frames = round(fragment_frames / model.task_heads.num_candidates)
-
-    total_frames, _num_mels = mel.shape
-    fragments = fragment_offsets(total_frames, fragment_frames, border_frames)
-
-    batch = []
-    for offset, _keep_start, _keep_end in fragments:
-        fragment = mel[offset:offset + fragment_frames]
-        if fragment.shape[0] < fragment_frames:
+    fragment_batch = []
+    for offset, _keep_start, _keep_end in fragment_offsets:
+        fragment = mel[offset:offset + fragment_size]
+        if fragment.shape[0] < fragment_size:
             # Only the final fragment can be short. Zero-pad to the fixed window: the
             # dataloader pads short pieces the same way, and log1p(mel) == 0 is silence.
             fragment = torch.nn.functional.pad(
-                fragment, (0, 0, 0, fragment_frames - fragment.shape[0]))
+                fragment, (0, 0, 0, fragment_size - fragment.shape[0]))
 
-        batch.append(fragment)
+        fragment_batch.append(fragment)
 
-    with torch.no_grad():
-        out = model(torch.stack(batch))
-
-    return fragments, out["class_logits"].float(), out["t_hat"].float()
+    return fragment_batch
 
 
-def stitch_candidates(mel, model, fragment_frames, border_frames=None):
+
+def predict_and_stitch_fragments(mel, model, fragment_size, border_size=None):
     """Every candidate the piece produces, trimmed to its owning fragment and ordered.
 
     Candidates rather than decoded events, so a read-out needing the whole piece at once
@@ -75,22 +68,36 @@ def stitch_candidates(mel, model, fragment_frames, border_frames=None):
     stitching rather than inside it. Returns which fragment each candidate came from as
     well, since Algorithm 5 requires a fragment and so has to be decoded within one.
     """
-    fragments, batched_class_logits, batched_t_hat = _forward_fragments(
-        mel, model, fragment_frames, border_frames)
+    total_frames, _ = mel.shape
+
+    if border_size is None:
+        border_size = round(fragment_size / model.task_heads.num_candidates)
+
+    fragment_offsets = get_fragment_offsets(total_frames, fragment_size, border_size)
+    fragment_batch = _get_fragment_batch(mel, model, fragment_offsets,
+                                         fragment_size, border_size)
+
+    with torch.no_grad():
+        fragments_prediction = model(torch.stack(fragment_batch))
+
+    fragments_class_logits = fragments_prediction["class_logits"].float()
+    fragments_t_hat = fragments_prediction["t_hat"].float()
+
     total_frames = mel.shape[0]
 
+    # JA: Concatenate the fragments into a single sequence
     kept_logits, kept_frames, kept_fragment = [], [], []
-    for index, (offset, keep_start, keep_end) in enumerate(fragments):
-        absolute = offset + batched_t_hat[index] * fragment_frames
+    for index, (offset, keep_start, keep_end) in enumerate(fragment_offsets):
+        absolute = offset + fragments_t_hat[index] * fragment_size
         inside = _inside(absolute, keep_start, keep_end, total_frames)
-        kept_logits.append(batched_class_logits[index][inside])
+        kept_logits.append(fragments_class_logits[index][inside])
         kept_frames.append(absolute[inside])
         kept_fragment.append(torch.full((int(inside.sum()),), index,
                                         dtype=torch.long, device=mel.device))
 
-    frames = torch.cat(kept_frames)
-    order = torch.argsort(frames)
-    return (torch.cat(kept_logits)[order], frames[order],
+    frames_of_fragments = torch.cat(kept_frames)
+    order = torch.argsort(frames_of_fragments)
+    return (torch.cat(kept_logits)[order], frames_of_fragments[order],
             torch.cat(kept_fragment)[order])
 
 

@@ -9,7 +9,7 @@ import torch
 
 from alignbeat.constants import CLASS_UNKNOWN, CLASS_DOWNBEAT, CLASS_BEAT
 from alignbeat.inference.decode import decode
-from alignbeat.inference.stitching import stitch_candidates
+from alignbeat.inference.stitching import predict_and_stitch_fragments
 from alignbeat.training.criterion import SubsetCriterion
 
 
@@ -90,23 +90,23 @@ def subset_predict_piece(model, criterion, batch, chunk_size, fps, *, detect_tau
     Returns (beats, downbeats) in seconds; the caller scores them, so nothing here
     reaches into the Lightning module.
     """
-    class_logits, frames, fragment = stitch_candidates(
+    class_logits, frames_of_fragments, fragment = predict_and_stitch_fragments(
         batch["spect"][0], model, chunk_size)
 
     if read_out == "map":
         # Algorithm 5's own Require line is a fragment, and one (omega, L) across a whole
         # piece costs 10.74 downbeat F, so this read-out is decoded within each fragment
         # and the labelled events concatenated afterwards.
-        parts = [decode(class_logits[fragment == f], frames[fragment == f],
+        parts = [decode(class_logits[fragment == f], frames_of_fragments[fragment == f],
                         criterion.meter_prior, tau=detect_tau, read_out=read_out)
                  for f in fragment.unique()]
         classes = torch.cat([part[0] for part in parts])
-        frames = torch.cat([part[1] for part in parts])
+        frames_of_fragments = torch.cat([part[1] for part in parts])
     else:
-        classes, frames, _scores = decode(class_logits, frames, criterion.meter_prior,
+        classes, frames_of_fragments, _scores = decode(class_logits, frames_of_fragments, criterion.meter_prior,
                                           tau=detect_tau, read_out=read_out)
 
-    seconds = (frames / fps).detach().cpu().numpy()
+    seconds = (frames_of_fragments / fps).detach().cpu().numpy()
     classes = classes.detach().cpu().numpy()
     return (seconds,), (seconds[classes == CLASS_DOWNBEAT],)
 
