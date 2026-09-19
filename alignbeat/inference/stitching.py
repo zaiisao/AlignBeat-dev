@@ -37,14 +37,8 @@ def get_fragment_offsets(total_frames, fragment_size, border_size):
     return fragments
 
 
-
-def _get_fragment_batch(mel, model, fragment_offsets, fragment_size, border_size):
-    """Run the model over the overlapping fragments covering one piece.
-
-    Section 9.3 leaves the border beta free but recommends tying it to the candidate
-    spacing D/N rather than to something outside the architecture: one cell is the
-    resolution at which this head can place an event at all.
-    """
+def _get_fragment_batch(mel, fragment_offsets, fragment_size):
+    """Cut one piece into the overlapping fragments the model is given."""
     fragment_batch = []
     for offset, _keep_start, _keep_end in fragment_offsets:
         fragment = mel[offset:offset + fragment_size]
@@ -59,7 +53,6 @@ def _get_fragment_batch(mel, model, fragment_offsets, fragment_size, border_size
     return fragment_batch
 
 
-
 def predict_and_stitch_fragments(mel, model, fragment_size, border_size=None):
     """Every candidate the piece produces, trimmed to its owning fragment and ordered.
 
@@ -68,22 +61,22 @@ def predict_and_stitch_fragments(mel, model, fragment_size, border_size=None):
     stitching rather than inside it. Returns which fragment each candidate came from as
     well, since Algorithm 5 requires a fragment and so has to be decoded within one.
     """
-    total_frames, _ = mel.shape
+    total_frames, _num_mels = mel.shape
 
     if border_size is None:
+        # Section 9.3 leaves the border beta free but recommends tying it to the
+        # candidate spacing D/N rather than to something outside the architecture: one
+        # cell is the resolution at which this head can place an event at all.
         border_size = round(fragment_size / model.task_heads.num_candidates)
 
     fragment_offsets = get_fragment_offsets(total_frames, fragment_size, border_size)
-    fragment_batch = _get_fragment_batch(mel, model, fragment_offsets,
-                                         fragment_size, border_size)
+    fragment_batch = _get_fragment_batch(mel, fragment_offsets, fragment_size)
 
     with torch.no_grad():
         fragments_prediction = model(torch.stack(fragment_batch))
 
     fragments_class_logits = fragments_prediction["class_logits"].float()
     fragments_t_hat = fragments_prediction["t_hat"].float()
-
-    total_frames = mel.shape[0]
 
     # JA: Concatenate the fragments into a single sequence
     kept_logits, kept_frames, kept_fragment = [], [], []
