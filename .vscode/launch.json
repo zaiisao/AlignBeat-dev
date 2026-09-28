@@ -171,7 +171,7 @@
             "cwd": "${workspaceFolder}",
             "env": {"PYTHONPATH": "${workspaceFolder}"},
             "args": [
-                "--models", "/tmp/ours_ckpt/R_f0.ckpt",
+                "--models", "${workspaceFolder}/checkpoints/RX_f0 S0 fold0 shift_tolerant_weighted_bce-h512-augTrueTrueTrue-epepoch=019.ckpt",
                 "--datasplit", "val", "--aggregation-type", "k-fold",
                 "--read-out", "duration",
                 "--gpu", "0", "--num_workers", "0"
