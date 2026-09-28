@@ -262,8 +262,10 @@ class PLBeatThis(LightningModule):
     def test_step(self, batch, batch_idx):
         metrics, model_prediction, _, _ = self.predict_step(batch, batch_idx)
         # The alignment head returns no framewise prediction for a whole piece, so
-        # there is no test loss to log -- only metrics, the comparable quantity.
-        if model_prediction is not None:
+        # there is no test loss to log -- only metrics, the comparable quantity. It
+        # returns decoded (beats, downbeats) in that slot for --dump-predictions, so
+        # the test is for the dense head's activation dict rather than for non-None.
+        if isinstance(model_prediction, dict):
             losses = self._compute_loss(batch, model_prediction)
             # log
             self.log_losses(losses, len(batch["spect"]), "test")
@@ -302,7 +304,11 @@ class PLBeatThis(LightningModule):
                 self.model, self.subset_criterion, batch, chunk_size, self.fps,
                 **self.decode_kwargs)
             metrics = self._compute_metrics(batch, beats, downbeats, step="test")
-            return metrics, None, batch["dataset"], batch["spect_path"]
+            # The decoded times themselves, not dense activations: this head has no
+            # postprocessor to run, so --dump-predictions consumes these as they are.
+            # batch_size is 1 here, so each is a 1-tuple holding one piece's array.
+            return (metrics, (beats[0], downbeats[0]),
+                    batch["dataset"], batch["spect_path"])
 
         # compute border size according to the loss type
         if hasattr(

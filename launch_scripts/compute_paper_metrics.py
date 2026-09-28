@@ -26,6 +26,61 @@ from beat_this.utils import infer_beat_numbers
 seed_everything(0, workers=True)
 
 
+def downbeat_annotated(predict_dataset):
+    """Map each dataset label the loader reports to whether it annotates downbeats.
+
+    Read off predict_dataset.items, which is where the loader itself gets it: the flag
+    is data/annotations/<dataset>/info.json's has_downbeats, and the item carries it
+    already paired with the label the metrics are grouped by -- including rwc's
+    per-section labels (rwc_classical and friends), which are renamed after the flag is
+    resolved. So this needs no knowledge of which corpora lack downbeats.
+    """
+    return {item["dataset"]: bool(item["downbeat_mask"])
+            for item in predict_dataset.items}
+
+
+def is_downbeat_metric(key):
+    return "downbeat" in key
+
+
+def average_metrics(metrics, dataset, has_downbeats):
+    """Mean over pieces, excluding pieces with no downbeat reference from downbeat means.
+
+    mir_eval returns 0.0 when the reference is empty, so a beat-only corpus scores 0 on
+    every downbeat metric. Averaging those in measures how much of the split is
+    beat-only rather than how the model does -- on the 8-fold val split simac and smc are
+    304 of 1715 pieces, which drags the downbeat means by roughly 18%. Beat metrics still
+    use every piece; only the downbeat means are restricted.
+    """
+    scored = np.asarray([has_downbeats.get(d, True) for d in dataset])
+    out = {}
+    for k, v in metrics.items():
+        keep = scored if is_downbeat_metric(k) else np.ones(len(v), dtype=bool)
+        out[k] = float(np.mean(v[keep])) if keep.any() else float("nan")
+    return out
+
+
+def average_metrics_by_dataset(metrics, dataset, has_downbeats):
+    """Per-dataset means, with a downbeat metric on a beat-only corpus left as nan.
+
+    Reporting 0.0 there invites it into a table as if it were a score; nan does not.
+    """
+    out = {}
+    for k, v in metrics.items():
+        per = {}
+        for d in np.unique(dataset):
+            if is_downbeat_metric(k) and not has_downbeats.get(d, True):
+                per[d] = float("nan")
+            else:
+                per[d] = float(np.mean(v[dataset == d]))
+        out[k] = per
+    return out
+
+
+def format_metric(value):
+    return "n/a (no downbeat annotation)" if np.isnan(value) else round(value, 3)
+
+
 def main(args):
     if len(args.models) == 1:
         print("Single model prediction for", args.models[0])
@@ -38,7 +93,7 @@ def main(args):
         # create model and trainer
         model, trainer = plmodel_setup(
             checkpoint, args.eval_trim_beats, args.dbn, args.gpu,
-            args.read_out
+            args.read_out, args.stitch_border
         )
         # predict
         metrics, dataset, preds, piece = compute_predictions(
@@ -49,22 +104,22 @@ def main(args):
         )
 
         # compute averaged metrics
-        averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
+        has_downbeats = downbeat_annotated(datamodule.predict_dataset)
+        averaged_metrics = average_metrics(metrics, dataset, has_downbeats)
         # compute metrics averaged by dataset
-        dataset_metrics = {
-            k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
-            for k, v in metrics.items()
-        }
+        dataset_metrics = average_metrics_by_dataset(metrics, dataset, has_downbeats)
         # print for dataset
-        print("Metrics")
+        print("Metrics (downbeat metrics over annotated pieces only)")
         for k, v in averaged_metrics.items():
             print(f"{k}: {v}")
         print("Dataset metrics")
         for k, v in dataset_metrics.items():
             print(k)
             for d, value in v.items():
-                print(f"{d}: {value}")
+                print(f"{d}: {format_metric(value)}")
             print("------")
+        if args.dump_piece_metrics:
+            write_piece_metrics(args.dump_piece_metrics, piece, dataset, metrics)
         # dump predictions
         if args.dump_predictions:
             write_predictions(args.dump_predictions, preds, piece)
@@ -85,14 +140,15 @@ def main(args):
                 checkpoint = load_checkpoint(checkpoint_path)
                 model, trainer = plmodel_setup(
                     checkpoint, args.eval_trim_beats, args.dbn, args.gpu,
-                    args.read_out
+                    args.read_out, args.stitch_border
                 )
 
                 metrics, dataset, preds, piece = compute_predictions(
                     model, trainer, datamodule.predict_dataloader()
                 )
                 # compute averaged metrics for one model
-                averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
+                has_downbeats = downbeat_annotated(datamodule.predict_dataset)
+                averaged_metrics = average_metrics(metrics, dataset, has_downbeats)
                 all_metrics.append(averaged_metrics)
             # compute mean and standard deviations for all model averages
             all_metrics_mean = {
@@ -106,7 +162,7 @@ def main(args):
                 for k, v in all_metrics[0].items()
             }
             # print all metrics
-            print("Metrics")
+            print("Metrics (downbeat metrics over annotated pieces only)")
             for k, v in all_metrics_stats.items():
                 # round to 3 decimal places
                 print(f"{k}: {round(v[0],3)} +- {round(v[1],3)}")
@@ -116,6 +172,9 @@ def main(args):
             all_piece_dataset = []
             all_piece_preds = []
             all_piece = []
+            # has_downbeats is a per-corpus flag, so the folds agree wherever they
+            # overlap; collect it across them because no single fold sees every corpus.
+            has_downbeats = {}
             # create datamodule for each model
             for i_model, checkpoint_path in enumerate(args.models):
                 print(f"Model {i_model+1}/{len(args.models)}")
@@ -126,7 +185,7 @@ def main(args):
                 # create model and trainer
                 model, trainer = plmodel_setup(
                     checkpoint, args.eval_trim_beats, args.dbn, args.gpu,
-                    args.read_out
+                    args.read_out, args.stitch_border
                 )
                 # predict
                 metrics, dataset, preds, piece = compute_predictions(
@@ -135,6 +194,7 @@ def main(args):
                     datamodule.predict_dataloader(),
                     return_preds=args.dump_predictions,
                 )
+                has_downbeats.update(downbeat_annotated(datamodule.predict_dataset))
                 all_piece_metrics.append(metrics)
                 all_piece_dataset.append(dataset)
                 if preds is not None:
@@ -152,28 +212,32 @@ def main(args):
                 np.unique(all_piece)
             ), "There are repeated pieces in the folds"
             if args.dump_piece_metrics:
-                import csv
-                keys = sorted(all_piece_metrics)
-                with open(args.dump_piece_metrics, "w", newline="") as fh:
-                    w = csv.writer(fh)
-                    w.writerow(["piece", "dataset"] + keys)
-                    for i in range(len(all_piece)):
-                        w.writerow([all_piece[i], all_piece_dataset[i]]
-                                   + [all_piece_metrics[k][i] for k in keys])
-                print(f"wrote per-piece metrics to {args.dump_piece_metrics}")
-            dataset_metrics = {
-                k: {
-                    d: np.mean(v[all_piece_dataset == d])
-                    for d in np.unique(all_piece_dataset)
-                }
-                for k, v in all_piece_metrics.items()
-            }
+                write_piece_metrics(args.dump_piece_metrics, all_piece,
+                                    all_piece_dataset, all_piece_metrics)
+            dataset_metrics = average_metrics_by_dataset(
+                all_piece_metrics, all_piece_dataset, has_downbeats
+            )
+            # The k-fold average over every held-out piece: this is the number the paper
+            # tables report, so print it here rather than leaving it to be recomputed
+            # from the per-dataset means (which would weight corpora, not pieces).
+            averaged_metrics = average_metrics(
+                all_piece_metrics, all_piece_dataset, has_downbeats
+            )
+            n_scored = sum(
+                1 for d in all_piece_dataset if has_downbeats.get(d, True)
+            )
+            print(
+                f"Metrics (k-fold over {len(all_piece)} pieces; downbeat metrics over "
+                f"the {n_scored} with downbeat annotation)"
+            )
+            for k, v in averaged_metrics.items():
+                print(f"{k}: {round(v,4)}")
             # print for dataset
             print("Dataset metrics")
             for k, v in dataset_metrics.items():
                 print(k)
                 for d, value in v.items():
-                    print(f"{d}: {round(value,3)}")
+                    print(f"{d}: {format_metric(value)}")
                 print("------")
             # dump predictions
             if args.dump_predictions:
@@ -200,7 +264,8 @@ def datamodule_setup(checkpoint, num_workers, datasplit):
     return datamodule
 
 
-def plmodel_setup(checkpoint, eval_trim_beats, dbn, gpu, read_out=None):
+def plmodel_setup(checkpoint, eval_trim_beats, dbn, gpu, read_out=None,
+                  stitch_border=None):
     """
     Set up the pytorch lightning model and trainer for evaluation.
 
@@ -234,9 +299,14 @@ def plmodel_setup(checkpoint, eval_trim_beats, dbn, gpu, read_out=None):
     if hparams.get("subset_kwargs"):
         hparams["subset_kwargs"] = {k: v for k, v in hparams["subset_kwargs"].items()
                                     if k not in RETIRED}
-        # Postdates every checkpoint, so it can only come from the command line.
+        # read_out postdates every checkpoint, so it can only come from the command
+        # line. stitch_border is set after the RETIRED filter on purpose: that strips the
+        # stale value old checkpoints recorded, leaving section 9.3's D/N default, and
+        # this then overrides it for a sweep.
         if read_out is not None:
             hparams["subset_kwargs"]["read_out"] = read_out
+        if stitch_border is not None:
+            hparams["subset_kwargs"]["stitch_border"] = stitch_border
     model = PLBeatThis(**hparams)
     model.load_state_dict(checkpoint["state_dict"])
     # set correct device and accelerator
@@ -262,7 +332,11 @@ def compute_predictions(model, trainer, predict_dataloader, return_preds=False):
     out = trainer.predict(model, predict_dataloader)
     metrics = [o[0] for o in out]
     if return_preds:
-        preds = [model.postprocessor(o[1]["beat"][0], o[1]["downbeat"][0]) for o in out]
+        # The alignment head returns decoded (beats, downbeats) in seconds directly;
+        # only the dense head needs its activations run through the postprocessor.
+        preds = [o[1] if isinstance(o[1], tuple)
+                 else model.postprocessor(o[1]["beat"][0], o[1]["downbeat"][0])
+                 for o in out]
     else:
         preds = None
     dataset = np.asarray([o[2][0] for o in out])
@@ -270,6 +344,19 @@ def compute_predictions(model, trainer, predict_dataloader, return_preds=False):
     # convert metrics from list of per-batch dictionaries to a single dictionary with np arrays as values
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece
+
+
+def write_piece_metrics(fn, piece, dataset, metrics):
+    """Per-piece metrics to CSV. Used by both the single-model and k-fold paths, which
+    previously meant the flag was silently ignored for a single model."""
+    import csv
+    keys = sorted(metrics)
+    with open(fn, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["piece", "dataset"] + keys)
+        for i in range(len(piece)):
+            w.writerow([piece[i], dataset[i]] + [metrics[k][i] for k in keys])
+    print(f"wrote per-piece metrics to {fn}")
 
 
 def write_predictions(fn, preds, piece):
@@ -335,6 +422,15 @@ if __name__ == "__main__":
         "each candidate's own argmax and what the paper's tables report, map is "
         "Algorithm 5's joint mode over (omega, L), duration advances bar position by "
         "the elapsed time (see alignbeat.inference.decode.decode)",
+    )
+    parser.add_argument(
+        "--stitch-border",
+        metavar="FRAMES",
+        type=int,
+        default=None,
+        help="Frames trimmed at each fragment seam, overriding the checkpoint. Default "
+        "is section 9.3's D/N, one candidate cell (8 at N=188, D=1500). 0 abuts "
+        "fragments with no overlap, so every seam keeps its own worst predictions.",
     )
     parser.add_argument(
         "--dump-piece-metrics",
