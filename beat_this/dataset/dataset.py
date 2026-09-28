@@ -212,9 +212,22 @@ class BeatTrackingDataset(Dataset):
                 truth_orig_downbeat,
             ) = prepare_annotations(item, start_frame, end_frame, self.fps)
 
+            # The piece's beat period, in seconds, as a property of the annotation rather
+            # than of the excerpt: the timing likelihood's scale is CONTINUITY_TOLERANCE
+            # times this, so it must describe the performance, not whichever 30 s window
+            # was sampled. Median, because asap's rubato pulls a mean. 0.0 when a piece
+            # has under two beats, which the criterion reads as "fall back to the fixed
+            # scale" rather than dividing by zero.
+            beat_times = np.asarray(item["beat_time"], dtype=np.float64)
+            beat_period = (float(np.median(np.diff(beat_times)))
+                           if beat_times.size >= 2 else 0.0)
+            if not np.isfinite(beat_period) or beat_period <= 0.0:
+                beat_period = 0.0
+
             # restructure the item dict with the correct training information
             item = {
                 "spect": spect,
+                "beat_period": beat_period,
                 "spect_path": str(item["spect_path"]),
                 "dataset": item["dataset"],
                 "start_frame": start_frame,

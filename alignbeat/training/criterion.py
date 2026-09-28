@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from alignbeat.constants import (CLASS_BACKGROUND, CLASS_BEAT, CLASS_UNKNOWN, CLASS_DOWNBEAT,
-                               F_MEASURE_TOLERANCE)
+                               F_MEASURE_TOLERANCE, CONTINUITY_TOLERANCE)
 from alignbeat.inference.decode import meter_phase_scores
 from alignbeat.training.dp import subset_select_dp
 
@@ -25,15 +25,36 @@ class SubsetCriterion(nn.Module):
 
     def __init__(self,
                  data_prior, window_seconds, gamma=0.5,
-                 meter_prior=None, match_event_cost=False):
+                 meter_prior=None, match_event_cost=False, latent_bar=True,
+                 tempo_relative_b=False):
         super(SubsetCriterion, self).__init__()
 
-        self.window_seconds = float(window_seconds)
+        self.window_seconds = float(window_seconds) # JA: This is 30 seconds in Beat This
 
-        self.lambda_l1 = 2.0 * self.window_seconds / F_MEASURE_TOLERANCE
+        # Time is modelled as a Laplace of scale b, whose NLL is |dt| / b, and b is taken
+        # as eps/2 where eps is the F-measure tolerance in the same fragment-fraction
+        # units: lambda_L1 = 1/b = 2/eps. So being half a tolerance out in time costs one
+        # nat of class log-probability, and the Laplace puts 1 - e^-2 = 86% of its mass
+        # inside the tolerance.
+        #
+        # Fixed from the tolerance rather than estimated by eq. (5): that EMA ran
+        # 73 -> 28 ms over one run, steepening the exchange rate into a gate as the
+        # regression sharpened.
+        self.laplace_b = F_MEASURE_TOLERANCE / (2.0 * self.window_seconds)
+        self.lambda_l1 = 1.0 / self.laplace_b
+
+        # With tempo_relative_b the scale becomes CONTINUITY_TOLERANCE * T instead, T
+        # being the piece's own beat period: the continuity metrics' acceptance radius
+        # for that piece rather than the F-measure's absolute one. The two coincide at
+        # 150 BPM. Pieces reporting no period keep laplace_b.
+        self.tempo_relative_b = bool(tempo_relative_b)
         self.gamma = gamma
 
         self.match_event_cost = match_event_cost
+        # The bar ablation. False keeps the beat-only branch but strips (omega, L) from
+        # it, so such a fragment asserts only that an event occurred -- the supervision a
+        # masked binary downbeat head gets from the same annotation.
+        self.latent_bar = bool(latent_bar)
         self.meter_candidates = tuple(sorted(int(L) for L in meter_prior)) if meter_prior else ()
         self.meter_prior = meter_prior
 
@@ -51,19 +72,32 @@ class SubsetCriterion(nn.Module):
 
         self.register_buffer("data_prior", data_priors / data_priors.sum())
 
-        print(f"[subset-criterion] lambda_L1={self.lambda_l1:g} gamma={self.gamma} "
+        print(f"[subset-criterion] b={self.laplace_b * self.window_seconds * 1e3:.1f}ms "
+              f"tempo_relative_b={self.tempo_relative_b} "
+              f"lambda_L1={self.lambda_l1:g} gamma={self.gamma} "
               f"meter_candidates={self.meter_candidates or 'off'} "
-              f"match_event_cost={self.match_event_cost}", flush=True)
+              f"match_event_cost={self.match_event_cost} "
+              f"latent_bar={self.latent_bar}", flush=True)
 
 
-    def build_l_match(self, log_probabilities, t_hat, gt_class, gt_time):
+    def _scale_for(self, target):
+        """The Laplace scale for one fragment, in fragment-fraction units."""
+        if not self.tempo_relative_b:
+            return self.laplace_b
+        period = float(target.get("period", 0.0) or 0.0)
+        if period <= 0.0:
+            return self.laplace_b
+        return CONTINUITY_TOLERANCE * period
+
+    def build_l_match(self, log_probabilities, t_hat, gt_class, gt_time, scale=None):
         """Algorithm 1 lines 18 and 20: L_match(i, j), returned (M, N) for the DP.
         Line 18 charges the observed class's NLL; line 20 has no class to charge, so an
         unlabelled event pays the timing error alone."""
         labelled = gt_class != CLASS_UNKNOWN
 
         # The timing term both 18 and 20 carry
-        time_loss_matrix = self.lambda_l1 * (t_hat[None, :] - gt_time[:, None]).abs()
+        b = self.laplace_b if scale is None else scale
+        time_loss_matrix = (t_hat[None, :] - gt_time[:, None]).abs() / b
 
         # Line 18, ind = 0: the observed class's own NLL
         labelled_class_loss_matrix = -log_probabilities[:, gt_class].T
@@ -81,7 +115,7 @@ class SubsetCriterion(nn.Module):
 
         return class_loss_matrix + time_loss_matrix
 
-    def _e_step(self, class_logits, t_hat, gt_class, gt_time):
+    def _e_step(self, class_logits, t_hat, gt_class, gt_time, scale=None):
         """Algorithm 1 lines 4-40, on one fragment, at theta_old. Takes the logits
         because the algorithm wants the head both ways: lines 18 and 20 write log p_hat,
         lines 7 and 10 write p_hat, and both come straight off them."""
@@ -91,14 +125,14 @@ class SubsetCriterion(nn.Module):
 
             # Lines 15-23: L_match(i, j).
             l_match = self.build_l_match(torch.log(class_posterior),
-                                         t_hat, gt_class, gt_time)
+                                         t_hat, gt_class, gt_time, scale)
 
             # Line 26: sigma_hat <- SubsetSelectDP(L_match).
             sigma_np = subset_select_dp(l_match.cpu().numpy())
             sigma = torch.from_numpy(sigma_np).to(class_logits.device)
             pi = None
 
-            if not has_class_labels:
+            if not has_class_labels and self.latent_bar:
                 # Line 36: q_i(c) <- P_hat(C = c | x, sigma_hat(i)).
                 matched_class_posterior = class_posterior[sigma]
 
@@ -127,7 +161,9 @@ class SubsetCriterion(nn.Module):
         num_unlabeled = 0
 
         if beat_only:
-            term = self._beat_only_term(matched_class_probs, match.pi)
+            term = (self._beat_only_term(matched_class_probs, match.pi)
+                    if self.latent_bar
+                    else self._event_only_term(matched_class_probs))
             num_unlabeled = len(gt_class)
         else:
             # JA: The input music has both downbeat and beat labels
@@ -136,7 +172,7 @@ class SubsetCriterion(nn.Module):
 
         return term, num_unlabeled
 
-    def _m_step(self, match, class_logits, t_hat, target):
+    def _m_step(self, match, class_logits, t_hat, target, scale=None):
         """Algorithm 2 lines 48-56: sigma_hat held fixed, the loss built at theta."""
         gt_class, gt_time = target['classes'], target['times']
 
@@ -153,7 +189,7 @@ class SubsetCriterion(nn.Module):
             log_probabilities[sigma], gt_class, match)
 
         residual = (gt_time - t_hat[sigma]).abs()            # (M,), raw
-        time_term = self.lambda_l1 * residual.sum()
+        time_term = residual.sum() / (self.laplace_b if scale is None else scale)
 
         # line 56, third term: the candidates sigma_hat did not match
         unmatched = torch.ones(num_candidates, dtype=torch.bool, device=device)
@@ -198,10 +234,13 @@ class SubsetCriterion(nn.Module):
                 continue
 
             # E-step: sigma_hat under the current theta (Algorithm 1, lines 4-40)
-            match = self._e_step(class_logits[b], t_hat[b], gt_class, gt_time)
+            # One scale per fragment, shared by both halves: the M-step must ascend the
+            # likelihood the E-step resolved sigma under.
+            scale = self._scale_for(targets[b])
+            match = self._e_step(class_logits[b], t_hat[b], gt_class, gt_time, scale)
 
             # M-step: sigma_hat fixed, the loss built at theta (Algorithm 2, lines 48-56)
-            terms = self._m_step(match, class_logits[b], t_hat[b], targets[b])
+            terms = self._m_step(match, class_logits[b], t_hat[b], targets[b], scale)
 
             for key, bucket in (('class', class_terms), ('time', time_terms),
                                 ('background', background_terms)):
@@ -310,6 +349,27 @@ class SubsetCriterion(nn.Module):
             surrogate = -(pi * flat).sum()
         return surrogate
 
+
+
+    def _event_only_term(self, matched_log):
+        """cls(theta; 1) with the bar removed: everything a beat-only annotation licenses.
+
+        -log(1 - p(empty)) at each matched event, the exact marginal likelihood of "an
+        event occurred here, class unrecorded" once the class is summed out. It is the
+        same quantity build_l_match charges an unlabelled pair, so the matching and the
+        loss agree on what such an annotation asserts.
+
+        With the bar on this is not added separately: log P_hat(c_i) is read off the raw
+        three-way head, so log P_hat(c_i) = log(1 - p(empty)) + log P_tilde(c_i) with
+        P_tilde normalised over {DB, B}. The first part does not depend on (omega, L) and
+        pi sums to one, so the surrogate already contains this term exactly -- which is
+        why loss_event_term was removed once the M-step was revised, and why the two arms
+        are nested rather than merely similar.
+        """
+        # float64 to match the bar term, whose meter-phase product is promoted: the two
+        # arms should hand the optimiser the same dtype, so they differ in the term alone.
+        return -torch.logsumexp(
+            matched_log[:, [CLASS_DOWNBEAT, CLASS_BEAT]].double(), dim=-1).sum()
 
 
     def _log_meter_phase_scores(self, matched_class_probs):

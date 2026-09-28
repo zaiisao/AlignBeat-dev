@@ -52,4 +52,5 @@ def test_matches_the_double_loop(kind, seed):
     want = l_match_loop(criterion, log_probabilities, t_hat, gt_class, gt_time)
 
     assert got.shape == (len(gt_class), len(t_hat)), "L_match must be (M, N) for the DP"
-    assert torch.equal(got, want), f"max |diff| = {(got - want).abs().max():.3e}"
+    torch.testing.assert_close(got, want, rtol=1e-14, atol=2e-13,
+                               msg=f"max |diff| = {(got - want).abs().max():.3e}")

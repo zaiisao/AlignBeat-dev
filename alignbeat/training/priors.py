@@ -37,6 +37,21 @@ def apply_downbeat_dropout(train_dataset, rate):
     return len(dropped)
 
 
+def drop_beat_only_pieces(train_dataset):
+    """Drop the training pieces whose annotation records no downbeats at all.
+
+    The companion to apply_downbeat_dropout: that one hides downbeats and keeps the
+    piece, this one removes it, so the two together separate what the latent bar
+    contributes from what the extra beat supervision contributes. Neither prior moves --
+    get_train_class_prior and get_train_meter_prior both skip items without a
+    downbeat_mask, so the pieces removed here never informed them. Rebinds the item list
+    rather than mutating entries, so it must run before any prior is measured off it.
+    """
+    before = len(train_dataset.items)
+    train_dataset.items = [item for item in train_dataset.items if item["downbeat_mask"]]
+    return before - len(train_dataset.items)
+
+
 def get_train_class_prior(train_dataset, weight="stream"):
     """pi_data: the DB:B balance in the data the class head is trained on, this fold.
 

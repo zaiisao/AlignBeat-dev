@@ -42,21 +42,33 @@ def subset_targets(batch, fps):
             classes = np.where(np.isin(beats, downbeats), CLASS_DOWNBEAT, CLASS_BEAT)
         else:
             classes = np.full(len(beats), CLASS_UNKNOWN)
+        # JA: Normalize the times into 0 to 1 range
+        # The piece's beat period in the same fragment-fraction units as "times", so
+        # the criterion never converts to seconds: |dt| / (theta * T) is invariant to
+        # the normalisation, both being divided by the same window. 0.0 means the piece
+        # carried too few beats to measure one; the criterion falls back to its fixed
+        # scale. .get() because checkpoints predating this key still decode through here.
+        period_seconds = float(batch["beat_period"][index]) if "beat_period" in batch else 0.0
 
         targets.append({
             "times": torch.as_tensor(beats / window_seconds,
                                      dtype=torch.float32, device=device),
             "classes": torch.as_tensor(classes, dtype=torch.long, device=device),
+            "period": period_seconds / window_seconds,
         })
     return targets
 
 
 def subset_decode(criterion, batch, model_prediction, fps, *, detect_tau,
-                  read_out="per_event"):
+                  read_out="per_event", stitch_border=None):
     """Inference per excerpt, returned as predicted TIMES in seconds.
 
     Every read-out runs here, including duration -- it estimates its tempo from whatever
     events the excerpt holds, so it is weaker than at piece scope but not ill-defined.
+
+    stitch_border is accepted and ignored: an excerpt is already one fragment, so there
+    are no seams to trim. It is in the signature because PLBeatThis splats one
+    decode_kwargs into both this and subset_predict_piece, where it does apply.
     """
     num_frames = batch["truth_beat"].shape[-1]
     window_seconds = num_frames / fps
@@ -84,14 +96,19 @@ def subset_decode(criterion, batch, model_prediction, fps, *, detect_tau,
 
 
 def subset_predict_piece(model, criterion, batch, chunk_size, fps, *, detect_tau,
-                         read_out="per_event"):
+                         read_out="per_event", stitch_border=None):
     """Whole-piece decoding for the alignment head (Section 9.3).
 
     Returns (beats, downbeats) in seconds; the caller scores them, so nothing here
     reaches into the Lightning module.
+
+    stitch_border is the frames trimmed at each fragment seam. None keeps section 9.3's
+    D/N, one candidate cell; it is free precisely because the degradation it trims comes
+    from truncated context at the edge, which is a property of the encoder rather than of
+    the candidate spacing, so the two need not agree.
     """
     class_logits, frames_of_fragments, fragment = predict_and_stitch_fragments(
-        batch["spect"][0], model, chunk_size)
+        batch["spect"][0], model, chunk_size, border_size=stitch_border)
 
     if read_out == "map":
         # Algorithm 5's own Require line is a fragment, and one (omega, L) across a whole
