@@ -22,8 +22,9 @@ from pytorch_lightning.loggers import WandbLogger
 from beat_this.dataset import BeatDataModule
 from alignbeat.constants import BPM_MAX
 from alignbeat.model.downsample import stages_from_tempo
-from alignbeat.training.priors import (apply_downbeat_dropout, get_train_class_prior,
-                               get_train_meter_prior, get_train_positive_weights)
+from alignbeat.training.priors import (apply_downbeat_dropout, drop_beat_only_pieces,
+                               get_train_class_prior, get_train_meter_prior,
+                               get_train_positive_weights)
 from beat_this.model.pl_module import PLBeatThis
 
 
@@ -100,9 +101,21 @@ def main(args):
         print(f"[downbeat-dropout] {args.downbeat_dropout:g}: hid downbeats on "
               f"{dropped} pieces", flush=True)
 
+    if args.drop_beat_only:
+        removed_count = drop_beat_only_pieces(datamodule.train_dataset)
+        print(f"[drop-beat-only] removed {removed_count} excerpts carrying no downbeat "
+              f"annotation", flush=True)
+
     # compute positive weights
     pos_weights = get_train_positive_weights(datamodule, widen_target_mask=3)
     print("Using positive weights: ", pos_weights)
+
+    # The latent bar lives in the alignment head's E-step; the dense head has no
+    # subset_criterion to switch it off in, so the flag would pass silently. Refuse,
+    # rather than report a bar ablation from a run that never had a bar.
+    if not args.latent_bar and args.head_type != "subset":
+        parser.error("--no-latent_bar requires --head_type subset: the dense head has "
+                     "no latent bar to remove, it masks its downbeat loss instead.")
 
     meter_prior = data_prior = None
     if args.head_type == "subset":
@@ -169,11 +182,14 @@ def main(args):
             "downsample_stages": downsample_stages,
             "detect_tau": args.detect_tau,
             "attention_layers": args.attention_layers,
+            "onset_adjustment": args.onset_adjustment,
             # criterion
             "gamma": args.gamma,
             "meter_prior": meter_prior,
             "data_prior": data_prior,
             "match_event_cost": args.match_event_cost,
+            "latent_bar": args.latent_bar,
+            "tempo_relative_b": args.tempo_relative_b,
         },
     )
 
@@ -362,6 +378,9 @@ if __name__ == "__main__":
                              "branch. 0 = per-candidate MLP, each candidate blind to "
                              "its neighbours. >0 lets them coordinate, which is how "
                              "DETR avoids NMS; a final LayerNorm is always applied")
+    parser.add_argument("--onset_adjustment", action="store_true",
+                        help="train a candidate event-vs-background calibrator using "
+                             "normalized librosa-style log-mel onset strength")
     parser.add_argument("--downbeat_dropout", type=float, default=0.0,
                         help="Annotation-coverage ablation: pretend this fraction of "
                              "downbeat-annotated TRAINING pieces were never downbeat-"
@@ -371,6 +390,22 @@ if __name__ == "__main__":
                         help="Algorithm 5 line 3's own threshold on the event mass "
                              "1 - p(empty), which decides which candidates are emitted "
                              "as events at all (default: %(default)s)")
+    parser.add_argument("--latent_bar", default=True,
+                        action=argparse.BooleanOptionalAction,
+                        help="Marginalise a beat-only fragment over the bar (omega, L). "
+                             "With --no-latent_bar such a fragment asserts only that an "
+                             "event occurred, which is the supervision a masked binary "
+                             "downbeat head gets from the same annotation")
+    parser.add_argument("--tempo_relative_b", action="store_true",
+                        help="Scale the timing Laplace by the piece's own beat period: "
+                             "b = CONTINUITY_TOLERANCE * T, the continuity metrics' "
+                             "acceptance radius for that piece, instead of the "
+                             "F-measure's absolute eps/2. The two coincide at 150 BPM; "
+                             "below it the window widens (default: %(default)s)")
+    parser.add_argument("--drop_beat_only", action="store_true",
+                        help="Train without the datasets carrying no downbeat "
+                             "annotation, so no fragment reaches the beat-only branch at "
+                             "all (default: %(default)s)")
     parser.add_argument("--meter_candidates", type=str, default="2,3,4,5,6,8",
                         help="candidate meters M the beat-only E-step marginalises "
                              "over, e.g. 2,3,4,6; pi_M is the corpus table in "
