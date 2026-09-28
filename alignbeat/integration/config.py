@@ -15,6 +15,10 @@ SUBSET_ARCH_DEFAULTS = {
     "attention_layers": 0,
     "detect_tau": 0.5,    # stage 1: keep candidates whose event mass clears this
     "read_out": "per_event",  # per_event | map | duration; see decode()
+    # Frames trimmed at each fragment seam. None keeps section 9.3's D/N; free because
+    # what it trims is truncated-context degradation at the edge, an encoder property.
+    "stitch_border": None,
+    "onset_adjustment": False,
 }
 
 
@@ -40,7 +44,7 @@ def split_subset_kwargs(subset_kwargs):
 
     head = {k: v for k, v in arch.items() if k in head_keys}
     criterion = {k: v for k, v in given.items() if k in criterion_keys}
-    decode = {k: arch[k] for k in ("detect_tau", "read_out")}
+    decode = {k: arch[k] for k in ("detect_tau", "read_out", "stitch_border")}
     leftover = set(arch) - head_keys - set(decode)
     if leftover:
         raise TypeError(f"subset_kwargs no consumer takes: {', '.join(sorted(leftover))}")

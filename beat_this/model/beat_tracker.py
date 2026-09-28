@@ -12,7 +12,7 @@ from rotary_embedding_torch import RotaryEmbedding
 from torch import nn
 
 from beat_this.model import roformer
-from alignbeat.model.head import SubsetHead
+from alignbeat.model.head import SubsetHead, librosa_logmel_onset_strength
 from beat_this.utils import replace_state_dict_key
 
 
@@ -119,6 +119,7 @@ class BeatThis(nn.Module):
         # above would otherwise overwrite: the zeroed regression and class weights.
         if isinstance(self.task_heads, SubsetHead):
             self.task_heads.head._initialize_weights()
+            self.task_heads.initialize_event_calibrator()
 
     @staticmethod
     def make_stem(spect_dim: int, stem_dim: int) -> nn.Module:
@@ -201,9 +202,19 @@ class BeatThis(nn.Module):
                     module.weight[module.padding_idx].fill_(0)
 
     def forward(self, x):
+        onset_strength = None
+        # torch.compile wraps a module in OptimizedModule, so isinstance() alone
+        # stops recognizing the subset head once task_heads is compiled. Keep the
+        # optional onset path active in both eager and compiled training runs.
+        task_heads = getattr(self.task_heads, "_orig_mod", self.task_heads)
+        if isinstance(task_heads, SubsetHead) and task_heads.onset_adjustment:
+            onset_strength = librosa_logmel_onset_strength(x)
         x = self.frontend(x)
         x = self.transformer_blocks(x)
-        x = self.task_heads(x)
+        if isinstance(task_heads, SubsetHead):
+            x = self.task_heads(x, onset_strength=onset_strength)
+        else:
+            x = self.task_heads(x)
         return x
 
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
