@@ -140,3 +140,5 @@ beat_this.egg-info/
 logs/
 cache/
 scores/
+# machine-specific editor config
+pyrightconfig.json

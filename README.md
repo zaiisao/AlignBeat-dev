@@ -1,102 +1,128 @@
 # AlignBeat
 
-Beat and downbeat tracking as **latent order-preserving alignment**.
+Code for **AlignBeat: A Latent Variable Model for Multi-Class Beat Tracking from
+Partially Labeled Data** (Jaehoon Ahn, Tae Gum Hwang, Moon-Ryul Jung).
+[arXiv:2510.14391](https://arxiv.org/abs/2510.14391)
 
-A fixed number of candidate predictors independently regress candidate event
-times and classify them, deliberately overgenerating more candidates than there
-are true events. Training must then decide which candidates align to a genuine
-event and which align to nothing — the same role a blank symbol plays in CTC's
-own alignment. Because the ground truth is sorted by construction and the
-candidate times are made strictly increasing by an architectural
-reparameterization, this reduces to choosing *which subset of candidates is
-active*, solved exactly by an O(NM) dynamic program.
+Most recent beat trackers predict beats and downbeats with two independent
+frame-wise binary heads, then reconcile them when they disagree. AlignBeat instead
+predicts a sparse set of grid points. Each grid point has a continuous event time and
+a single distribution over {downbeat, beat, no event}, so a downbeat is a beat by
+construction. Which grid point accounts for which annotated event is a latent
+alignment, fitted by hard expectation–maximization: the E-step finds the best
+order-preserving alignment with an O(MN) dynamic program, and the M-step takes a
+gradient step at that alignment. For datasets that annotate beats but not downbeats,
+the event class is latent too and is marginalized out, so those datasets can be
+kept in training instead of being dropped or masked.
 
-Equation and algorithm numbers throughout the code refer to the paper draft,
-which is kept in `private/` (local-only, not tracked).
+Over 8-fold cross-validation on the 18 Beat This! datasets, with no post-processing
+at any stage, downbeat CMLt rises 3.6 points over Beat This! and beat CMLt rises 3.1,
+while both F-measures move by less than one point.
 
 ## Layout
 
 This repository is a fork of [Beat This!](https://github.com/CPJKU/beat_this)
-(Foscarin et al., 2024). Upstream's tree sits at the root unmodified except for
-three files; ours is the `alignbeat/` package it imports.
+(Foscarin et al., 2024). Its frontend and transformer are reused unchanged. Our code
+is the `alignbeat/` package, and `beat_this/` calls into it from a few marked places.
 
 | path | what |
 | --- | --- |
-| `alignbeat/subset_head.py` | candidate heads, eq. (1), the DP (Alg. 1), and the losses |
-| `alignbeat/progressive_downsample.py` | T → N patch-merging downsample; N derived from N_min |
-| `alignbeat/stitching.py` | reference implementation of §9.3 fragment reassembly |
-| `beat_this/model/beat_tracker.py` | upstream, plus a `SubsetHead` branch |
-| `beat_this/model/pl_module.py` | upstream, plus the subset loss, targets and decode |
-| `launch_scripts/train.py` | upstream, plus `--head_type` and the flags below |
-| `diagnose_bottleneck.py` | attribute a flat F-measure to its component failure |
+| `alignbeat/model/head.py` | grid-point head: class head, time head, eq. (1) |
+| `alignbeat/model/downsample.py` | strided-convolution reduction from frames to N grid points |
+| `alignbeat/training/dp.py` | the E-step alignment, recursion (3) |
+| `alignbeat/training/criterion.py` | the matching cost (2) and the M-step loss (4)–(5) |
+| `alignbeat/training/priors.py` | per-fold statistics read off the training split |
+| `alignbeat/inference/decode.py` | thresholding (6) and conversion to beat/downbeat times |
+| `alignbeat/inference/stitching.py` | covering a full piece with overlapping fragments (§2.3) |
+| `alignbeat/integration/` | glue between the head and the Beat This! Lightning module |
+| `launch_scripts/train.py` | upstream training script, plus `--head_type` and the flags below |
+| `launch_scripts/compute_paper_metrics.py` | scoring over whole pieces |
+| `diagnose_bottleneck.py` | breaks a validation score down into its component failures |
 
-Everything else — dataset, augmentation, losses, postprocessor, metrics,
-`compute_paper_metrics.py` — is upstream code, untouched. That is deliberate:
-`--head_type dense` reproduces Beat This! exactly, so the A/B against
-`--head_type subset` differs in the head and its loss and in nothing else.
+Equation and section numbers refer to arXiv v3.
 
-To pull upstream changes: `git merge beat_this/main`.
+`--head_type dense` (the default) trains the original Beat This! model, and
+`--head_type subset` trains AlignBeat. Everything else, including data, augmentation
+and evaluation, is shared between the two.
 
-## What is implemented
-
-Everything is off by default: the defaults are the hard-EM pipeline of Sections 5-7.
-
-| construction | flag |
-| --- | --- |
-| §4.2 known-meter spacing in the selection, eq. (6) | `--mu_meter` |
-| §4.1.2/4.1.3 per-candidate precision, with all three mitigations | `--predict_precision` |
-| §8 EM over the shared phase latent, eqs. (12)-(15) | `--meter_L` (beat-only data) |
-| §8.1 mixed meter within a fragment, eq. (17) | per-fragment `segments` metadata |
-| §8.3 joint MAP of (σ, φ₀), eq. (19) | `--joint_phase` |
-| §8.4 marginal likelihood over σ, eq. (23) | `--marginal` |
-| §8.5 joint marginalization of (σ, φ₀), eq. (30) | `--marginal --joint_phase` |
-| §8.6 marginalizing the meter too, eq. (32) | `--marginal_meters 2-12` |
-| §10.2 candidate self-attention for the class branch, eq. (35) | `--class_attention_layers` |
-| §10.3 class-specific reweighting | `--omega_db` |
-| §10.4 periodicity regularizer, eqs. (36)-(37) | `--lambda_r` |
-
-`tests/test_phase.py` checks eqs. (19), (20), (25)-(29) and (32)-(34) against
-brute-force enumeration, which is the paper's own stated verification. Two things are
-deliberately not done: the O(N²M/L) saving §4.2 derives for the augmented recursion
-(the implementation is exact but O(N²M) — see the docstring), and Remark 3's global
-meter/phase head, which the paper does not formalize.
-
-## Running
+## Setup
 
 ```sh
+pip install -r requirements.txt
 export PYTHONPATH=$PWD
+```
 
-# the alignment head, and the dense baseline it is measured against
-python launch_scripts/train.py --name myrun --head_type subset --fold 0
-python launch_scripts/train.py --name mydense --head_type dense --fold 0
+Data goes under `data/`, prepared as described in the
+[Beat This! repository](https://github.com/CPJKU/beat_this). The folds are Beat This!'s
+own `8-folds.split`, and `--fold N` names the fold held out.
 
-# scoring, and attributing a flat result to its component failure
-python launch_scripts/compute_paper_metrics.py --models "checkpoints/myrun*.ckpt"
-python diagnose_bottleneck.py --checkpoints "checkpoints/myrun*.ckpt"
+## Training
 
-# tests are plain scripts, not a pytest suite
+As in the paper, the encoder starts from Beat This!'s released checkpoint for the
+same fold, and the full model is trained for 20 more epochs:
+
+```sh
+curl -LO https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/fold0.ckpt
+
+python launch_scripts/train.py --name alignbeat_f0 --head_type subset --fold 0 \
+    --init_encoder_from fold0.ckpt --max-epochs 20
+```
+
+Run `python launch_scripts/train.py --help` for every flag. These are the
+AlignBeat-specific ones:
+
+| flag | effect |
+| --- | --- |
+| `--drop_beat_only` | leave out the beat-only datasets (Simac, SMC): the DROP arm of §4.1 |
+| `--gamma` | weight γ of the background term in (5) (default 1) |
+| `--detect_tau` | threshold τ in (6) (default 0.5) |
+| `--attention_layers` | transformer layers at the start of the class head (default 2) |
+| `--bpm_max`, `--train_length` | together these fix N, the number of grid points |
+| `--downbeat_dropout` | treat this fraction of downbeat-annotated pieces as beat-only |
+
+Some flags, such as `--latent_bar`, `--tempo_relative_b` and `--onset_adjustment`,
+switch on extensions that go beyond the paper. They are kept for follow-up work and
+do not affect the results reported there.
+
+## Evaluation
+
+```sh
+python launch_scripts/compute_paper_metrics.py --models checkpoints/alignbeat_f0*.ckpt
+python diagnose_bottleneck.py --checkpoints "checkpoints/alignbeat_f0*.ckpt"
+```
+
+## Tests
+
+The tests are standalone scripts, not a pytest suite:
+
+```sh
 for t in tests/test_*.py; do python "$t" || break; done
 ```
 
-Data lives where upstream expects it, under `data/`. Folds are Beat This!'s own
-`8-folds.split`; `--fold N` names the fold held out.
-
-`N` is not a free hyperparameter: the window is fixed at T = 1500 frames (30s at
-50fps) and the candidate count derives from the physical tempo bound
-`N_min = BPM_max * D`, which the downsampling schedule is not free to shrink
-below.
-
-See `docs/ABLATIONS.md` for the measured arms.
-
 ## History
 
-This began as BeatFCOS, a 1-D adaptation of FCOS with anchors, interval
-regression and Soft-NMS ([arXiv:2510.14391](https://arxiv.org/abs/2510.14391)),
-then moved from a WaveBeat backbone to Beat Transformer to Beat This!, and
-finally dropped anchors entirely for the subset-selection formulation above.
-None of the anchor machinery survives here; the original is preserved in its
-own repository.
+This project began as BeatFCOS, a 1-D adaptation of FCOS with anchors, interval
+regression and Soft-NMS (earlier versions of
+[arXiv:2510.14391](https://arxiv.org/abs/2510.14391)). None of that anchor machinery
+remains here.
+
+## Citation
+
+```bibtex
+@misc{ahn2025alignbeat,
+  title         = {{AlignBeat}: A Latent Variable Model for Multi-Class Beat Tracking
+                   from Partially Labeled Data},
+  author        = {Ahn, Jaehoon and Hwang, Tae Gum and Jung, Moon-Ryul},
+  year          = {2025},
+  eprint        = {2510.14391},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.SD},
+}
+```
+
+Please also cite [Beat This!](https://github.com/CPJKU/beat_this), whose model,
+data pipeline and evaluation this code builds on.
 
 ## License
 
-MIT, matching upstream Beat This!. See `LICENSE`.
+MIT, the same as upstream Beat This!. See `LICENSE`.

@@ -3,21 +3,24 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "beat-this"
-version = "1.1.0"
-description = "Beat This! beat tracker"
+name = "alignbeat"
+version = "0.1.0"
+description = "AlignBeat: multi-class beat and downbeat tracking from partially labeled data, built on Beat This!"
 readme = "README.md"
 classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Multimedia :: Sound/Audio :: Analysis",
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
 ]
 authors = [
-    {name = "Francesco Foscarin", email = "francesco.foscarin@jku.at"},
-    {name = "Jan Schlüter", email = "jan.schlueter@jku.at"},
+    {name = "Jaehoon Ahn"},
+    {name = "Tae Gum Hwang"},
+    {name = "Moon-Ryul Jung"},
 ]
-requires-python = ">=3"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "numpy>=1.20",
     "torch>=2",
@@ -25,17 +28,25 @@ dependencies = [
     "einops",
     "rotary-embedding-torch",
     "soxr",
+    "librosa",
 ]
-license = "MIT"
-license-files = ["LICENSE"]
 
-[tool.setuptools.package-dir]
-beat_this = "beat_this"
+[project.optional-dependencies]
+train = [
+    "pytorch-lightning",
+    "pandas",
+    "mir_eval",
+    "wandb",
+    "numba",
+]
+
+[tool.setuptools.packages.find]
+include = ["beat_this*", "alignbeat*"]
 
 [project.urls]
-Repository = "https://github.com/CPJKU/beat_this"
-Issues = "https://github.com/CPJKU/beat_this/issues"
-Changelog = "https://github.com/CPJKU/beat_this/blob/main/CHANGELOG.md"
+Repository = "https://github.com/zaiisao/AlignBeat"
+Paper = "https://arxiv.org/abs/2510.14391"
+Upstream = "https://github.com/CPJKU/beat_this"
 
 [project.scripts]
 beat_this = "beat_this.cli:main"
