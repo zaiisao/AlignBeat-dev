@@ -122,3 +122,6 @@ runs/
 # machine-specific editor config
 .vscode/
 pyrightconfig.json
+
+# local test suite; not part of the public release
+/tests/

@@ -96,12 +96,6 @@ do not affect the results reported there.
 python launch_scripts/compute_paper_metrics.py --models checkpoints/alignbeat_f0*.ckpt
 ```
 
-## Tests
-
-```sh
-pytest tests
-```
-
 ## History
 
 This project began as BeatFCOS, a 1-D adaptation of FCOS with anchors, interval
