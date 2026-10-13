@@ -1,8 +1,7 @@
 """The alignment head's training and inference steps.
 
-Free functions over the Lightning module rather than methods on it: PLBeatThis
-calls them from four guard clauses, which keeps beat_this/ at a handful of edited
-lines instead of carrying 150 of ours.
+Free functions over the Lightning module rather than methods on it: PLAlignBeat
+(lightning.py) calls them from its overrides of upstream's steps.
 """
 import numpy as np
 import torch
@@ -67,7 +66,7 @@ def subset_decode(criterion, batch, model_prediction, fps, *, detect_tau,
     events the excerpt holds, so it is weaker than at piece scope but not ill-defined.
 
     stitch_border is accepted and ignored: an excerpt is already one fragment, so there
-    are no seams to trim. It is in the signature because PLBeatThis splats one
+    are no seams to trim. It is in the signature because PLAlignBeat splats one
     decode_kwargs into both this and subset_predict_piece, where it does apply.
     """
     num_frames = batch["truth_beat"].shape[-1]

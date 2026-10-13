@@ -19,13 +19,13 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from beat_this.dataset import BeatDataModule
+from alignbeat.integration.data import AlignBeatDataModule
 from alignbeat.constants import BPM_MAX
 from alignbeat.model.downsample import stages_from_tempo
 from alignbeat.training.priors import (apply_downbeat_dropout, drop_beat_only_pieces,
                                get_train_class_prior, get_train_meter_prior,
                                get_train_positive_weights)
-from beat_this.model.pl_module import PLBeatThis
+from alignbeat.integration.lightning import PLAlignBeat
 
 
 def main(args):
@@ -74,7 +74,7 @@ def main(args):
             "max_parts": 9,
         }
 
-    datamodule = BeatDataModule(
+    datamodule = AlignBeatDataModule(
         data_dir,
         batch_size=args.batch_size,
         spect_fps=args.fps,
@@ -150,7 +150,7 @@ def main(args):
           f"{args.train_length} (tempo floor at {args.bpm_max} bpm: {tempo_floor})",
           flush=True)
 
-    pl_model = PLBeatThis(
+    pl_model = PLAlignBeat(
         spect_dim=128,
         fps=50,
         transformer_dim=args.transformer_dim,
@@ -261,8 +261,7 @@ def main(args):
         # several jobs blocked in D state, dropping training from 6.1 to 0.86 it/s.
         # Snapshotting lets training run with validation disabled entirely
         # (--val-frequency larger than --max-epochs) and the curve reconstructed
-        # afterwards by scoring the snapshots, which is what score_fold0_snapshots.py
-        # already does for the vanilla arms.
+        # afterwards by scoring the snapshots.
         callbacks.append(
             ModelCheckpoint(
                 every_n_epochs=args.snapshot_every,
@@ -408,8 +407,8 @@ if __name__ == "__main__":
                              "all (default: %(default)s)")
     parser.add_argument("--meter_candidates", type=str, default="2,3,4,5,6,8",
                         help="candidate meters M the beat-only E-step marginalises "
-                             "over, e.g. 2,3,4,6; pi_M is the corpus table in "
-                             "docs/METER_DISTRIBUTION.md, renormalised over these")
+                             "over, e.g. 2,3,4,6; pi_M is this fold's training-split "
+                             "meter distribution, renormalised over these")
     parser.add_argument("--bpm_max", type=float, default=BPM_MAX,
                         help=f"fastest tempo the corpus contains (default {BPM_MAX:g}); "
                              "N is derived from it and the window length")

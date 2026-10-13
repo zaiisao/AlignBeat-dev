@@ -22,7 +22,8 @@ def prior_over(candidates):
 
 from alignbeat.training.dp import subset_posterior_marginals, subset_select_dp, subset_select_logsumexp
 
-# Corpus meter distribution, from docs/METER_DISTRIBUTION.md. A fixture only: the
+# Corpus meter distribution: each track's modal beats per bar, over the 5,556
+# annotated tracks. A fixture only: the
 # model is trained on a per-fold prior measured by get_train_meter_prior, which
 # excludes the held-out pieces and so differs from this.
 METER_PRIOR = {2: 0.0447, 3: 0.0838, 4: 0.8612, 5: 0.0011, 6: 0.0068, 8: 0.0017}
@@ -65,8 +66,8 @@ def test_logsumexp_batched_matches_per_fragment():
 
 def test_flags_reach_the_criterion():
     """Flags have silently failed to arrive at the criterion before. Check the plumbing."""
-    from beat_this.model.pl_module import PLBeatThis
-    m = PLBeatThis(
+    from alignbeat.integration.lightning import PLAlignBeat
+    m = PLAlignBeat(
         transformer_dim=64, n_layers=2, subset_head=True,
         subset_kwargs=dict(num_candidates=188, data_prior=DATA_PRIOR,
                            meter_prior=prior_over((2, 3, 4, 6)), gamma=0.25))

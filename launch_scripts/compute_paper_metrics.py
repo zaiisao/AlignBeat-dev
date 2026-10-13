@@ -17,9 +17,9 @@ def _load_trusted(*a, **k):
     return _torch_load(*a, **k)
 torch.load = _load_trusted
 
-from beat_this.dataset import BeatDataModule
+from alignbeat.integration.data import AlignBeatDataModule
 from beat_this.inference import load_checkpoint
-from beat_this.model.pl_module import PLBeatThis
+from alignbeat.integration.lightning import PLAlignBeat
 from beat_this.utils import infer_beat_numbers
 
 # for repeatability
@@ -259,7 +259,7 @@ def datamodule_setup(checkpoint, num_workers, datasplit):
         datamodule_hparams["num_workers"] = num_workers
     datamodule_hparams["predict_datasplit"] = datasplit
     datamodule_hparams["data_dir"] = data_dir
-    datamodule = BeatDataModule(**datamodule_hparams)
+    datamodule = AlignBeatDataModule(**datamodule_hparams)
     datamodule.setup(stage="predict")
     return datamodule
 
@@ -307,7 +307,7 @@ def plmodel_setup(checkpoint, eval_trim_beats, dbn, gpu, read_out=None,
             hparams["subset_kwargs"]["read_out"] = read_out
         if stitch_border is not None:
             hparams["subset_kwargs"]["stitch_border"] = stitch_border
-    model = PLBeatThis(**hparams)
+    model = PLAlignBeat(**hparams)
     model.load_state_dict(checkpoint["state_dict"])
     # set correct device and accelerator
     if gpu >= 0:

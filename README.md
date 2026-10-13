@@ -21,9 +21,10 @@ while both F-measures move by less than one point.
 
 ## Layout
 
-This repository is a fork of [Beat This!](https://github.com/CPJKU/beat_this)
-(Foscarin et al., 2024). Its frontend and transformer are reused unchanged. Our code
-is the `alignbeat/` package, and `beat_this/` calls into it from a few marked places.
+AlignBeat builds on [Beat This!](https://github.com/CPJKU/beat_this) (Foscarin et
+al., 2024), installed from PyPI as `beat-this==1.1.0`. Its frontend, transformer, data
+pipeline and evaluation are reused unchanged. The `alignbeat/` package subclasses
+them, replacing only the output head, the loss and the decoding.
 
 | path | what |
 | --- | --- |
@@ -34,10 +35,11 @@ is the `alignbeat/` package, and `beat_this/` calls into it from a few marked pl
 | `alignbeat/training/priors.py` | per-fold statistics read off the training split |
 | `alignbeat/inference/decode.py` | thresholding (6) and conversion to beat/downbeat times |
 | `alignbeat/inference/stitching.py` | covering a full piece with overlapping fragments (§2.3) |
-| `alignbeat/integration/` | glue between the head and the Beat This! Lightning module |
-| `launch_scripts/train.py` | upstream training script, plus `--head_type` and the flags below |
+| `alignbeat/model/tracker.py` | Beat This!'s network with the grid-point head in place of its own |
+| `alignbeat/integration/lightning.py` | Beat This!'s Lightning module, routed to the alignment head |
+| `alignbeat/integration/data.py` | Beat This!'s data module, plus each piece's beat period |
+| `launch_scripts/train.py` | Beat This!'s training script, plus `--head_type` and the flags below |
 | `launch_scripts/compute_paper_metrics.py` | scoring over whole pieces |
-| `diagnose_bottleneck.py` | breaks a validation score down into its component failures |
 
 Equation and section numbers refer to arXiv v3.
 
@@ -48,9 +50,10 @@ and evaluation, is shared between the two.
 ## Setup
 
 ```sh
-pip install -r requirements.txt
-export PYTHONPATH=$PWD
+pip install -e ".[train]"
 ```
+
+`requirements.txt` pins the exact versions the paper's results were produced with.
 
 Data goes under `data/`, prepared as described in the
 [Beat This! repository](https://github.com/CPJKU/beat_this). The folds are Beat This!'s
@@ -88,15 +91,12 @@ do not affect the results reported there.
 
 ```sh
 python launch_scripts/compute_paper_metrics.py --models checkpoints/alignbeat_f0*.ckpt
-python diagnose_bottleneck.py --checkpoints "checkpoints/alignbeat_f0*.ckpt"
 ```
 
 ## Tests
 
-The tests are standalone scripts, not a pytest suite:
-
 ```sh
-for t in tests/test_*.py; do python "$t" || break; done
+pytest tests
 ```
 
 ## History

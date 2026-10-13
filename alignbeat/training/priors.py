@@ -1,6 +1,6 @@
 """Per-fold priors read off the training split, and the annotation-coverage knob.
 
-These live here rather than on BeatDataModule so beat_this/ stays at upstream. Each
+These live here rather than on the datamodule, so it stays a thin layer over upstream. Each
 takes the training dataset it measures, and downbeat_dropout is applied to the built
 item list rather than threaded through the loader.
 """
@@ -96,7 +96,7 @@ def get_train_meter_prior(train_dataset, candidates=(2, 3, 4, 5, 6, 8),
 
     weight:     "stream" counts train_dataset.items as they are, i.e. with the
                 length-based oversampling the head actually sees; "track" counts
-                each distinct piece once, as METER_DISTRIBUTION.md does.
+                each distinct piece once.
     floor:      every candidate's share is raised to at least this before
                 renormalising, so a meter absent from a fold is improbable rather
                 than impossible (an unfloored zero gives log pi_M = -inf, which

@@ -22,12 +22,11 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
+    # AlignBeat subclasses Beat This!'s model, data module and Lightning module, so
+    # the version is pinned to the release it was verified against.
+    "beat-this==1.1.0",
     "numpy>=1.20",
     "torch>=2",
-    "torchaudio",
-    "einops",
-    "rotary-embedding-torch",
-    "soxr",
     "librosa",
 ]
 
@@ -41,12 +40,9 @@ train = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["beat_this*", "alignbeat*"]
+include = ["alignbeat*"]
 
 [project.urls]
 Repository = "https://github.com/zaiisao/AlignBeat"
 Paper = "https://arxiv.org/abs/2510.14391"
 Upstream = "https://github.com/CPJKU/beat_this"
-
-[project.scripts]
-beat_this = "beat_this.cli:main"

@@ -10,7 +10,7 @@ from alignbeat.model.head import (
     librosa_logmel_onset_strength,
     sample_onset_strength,
 )
-from beat_this.model.beat_tracker import BeatThis
+from alignbeat.model.tracker import AlignBeatTracker
 
 
 def test_torch_onset_strength_matches_librosa_on_stored_logmel():
@@ -70,10 +70,9 @@ def test_onset_adjustment_option_routes_to_subset_head():
 
 
 def test_compiled_subset_head_keeps_onset_input_and_backpropagates():
-    model = BeatThis(
+    model = AlignBeatTracker(
         spect_dim=128, transformer_dim=64, ff_mult=2, n_layers=1,
         stem_dim=8, head_dim=8, partial_transformers=False,
-        subset_head=True,
         subset_head_kwargs={
             "num_candidates": 8,
             "train_length": 64,

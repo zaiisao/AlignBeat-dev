@@ -25,7 +25,8 @@ from alignbeat.inference.decode import decode, intervals_to_events, targets_to_e
 from alignbeat.training.dp import subset_select_dp, subset_select_logsumexp
 from alignbeat.model.head import SubsetSelectionHead, monotonic_times
 
-# Corpus meter distribution, from docs/METER_DISTRIBUTION.md. A fixture only: the
+# Corpus meter distribution: each track's modal beats per bar, over the 5,556
+# annotated tracks. A fixture only: the
 # model is trained on a per-fold prior measured by get_train_meter_prior, which
 # excludes the held-out pieces and so differs from this.
 METER_PRIOR = {2: 0.0447, 3: 0.0838, 4: 0.8612, 5: 0.0011, 6: 0.0068, 8: 0.0017}

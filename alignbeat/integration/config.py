@@ -6,7 +6,7 @@ from alignbeat.model.head import SubsetHead
 
 
 # Architecture and decode settings ride in one `subset_kwargs` dict rather than in
-# PLBeatThis's own signature. This is the single source of truth: the keys are the
+# PLAlignBeat's own signature. This is the single source of truth: the keys are the
 # allowlist, the values the defaults applied when a checkpoint predates a knob.
 SUBSET_ARCH_DEFAULTS = {
     "num_candidates": None,

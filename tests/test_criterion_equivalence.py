@@ -7,7 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from alignbeat.constants import CLASS_BEAT, CLASS_UNKNOWN, CLASS_DOWNBEAT
 from alignbeat.training.criterion import SubsetCriterion
 
-# Corpus meter distribution, from docs/METER_DISTRIBUTION.md. A fixture only: the
+# Corpus meter distribution: each track's modal beats per bar, over the 5,556
+# annotated tracks. A fixture only: the
 # model is trained on a per-fold prior measured by get_train_meter_prior, which
 # excludes the held-out pieces and so differs from this.
 METER_PRIOR = {2: 0.0447, 3: 0.0838, 4: 0.8612, 5: 0.0011, 6: 0.0068, 8: 0.0017}
