@@ -50,10 +50,13 @@ and evaluation, is shared between the two.
 ## Setup
 
 ```sh
-pip install -e ".[train]"
+conda env create -f environment.yml
+conda activate alignbeat
 ```
 
-`requirements.txt` pins the exact versions the paper's results were produced with.
+This installs the exact versions the paper's results were produced with (pinned in
+`requirements.txt`), including the CUDA 11.8 build of PyTorch. Without conda,
+`pip install -e ".[train]"` installs the same packages unpinned.
 
 Data goes under `data/`, prepared as described in the
 [Beat This! repository](https://github.com/CPJKU/beat_this). The folds are Beat This!'s

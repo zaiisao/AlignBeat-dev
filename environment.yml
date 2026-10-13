@@ -1,0 +1,21 @@
+# Conda environment for AlignBeat, matching the versions the paper's results were
+# produced with. From the repository root:
+#
+#   conda env create -f environment.yml
+#   conda activate alignbeat
+#
+# torch is the CUDA 11.8 build; for another CUDA version, change the index URL to
+# the matching one from https://pytorch.org/get-started/locally/.
+name: alignbeat
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  # lets torchaudio and soundfile decode compressed audio such as mp3
+  - ffmpeg
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu118
+      - -r requirements.txt
+      - pytest
+      - -e .
