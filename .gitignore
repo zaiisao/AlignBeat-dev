@@ -139,3 +139,4 @@ beat_this.egg-info/
 # Session artifacts: training and scoring output, not source
 logs/
 cache/
+scores/
