@@ -78,9 +78,11 @@ class SubsetCriterion(nn.Module):
         return CONTINUITY_TOLERANCE * period
 
     def build_l_match(self, log_probabilities, t_hat, gt_class, gt_time, scale=None):
-        """Algorithm 1 lines 18 and 20: L_match(i, j), returned (M, N) for the DP.
-        Line 18 charges the observed class's NLL; line 20 has no class to charge, so an
-        unlabelled event pays the timing error alone."""
+        """Build the (M, N) pairing costs used by the alignment DP.
+
+        Labelled events pay their observed class NLL. Beat-only events pay the negative
+        log mass of the two event classes when ``match_event_cost`` is enabled.
+        """
         labelled = gt_class != CLASS_UNKNOWN
 
         # The timing term both 18 and 20 carry
