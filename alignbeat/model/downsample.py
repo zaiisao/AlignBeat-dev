@@ -33,19 +33,14 @@ class Downsample(nn.Module):
                                 "stride; avg/max are adaptive and do not")
 
         if stages is not None:
-            # JA: We apply half downsampling three times assuming the original
-            # length of the spectrogram is 1500.
             self.strides = [2] * int(stages)
         else:
             self.strides = factor_strides(fragment_frames, num_candidates)
 
-        # JA: The size of the sequence to be downsampled. It is the original
-        # length plus padding size
         self.padded_length = num_candidates * math.prod(self.strides)
 
         if mode == "learned":
-            # JA: Reduce the length in several small strided steps (1500 -> 750 -> 250)
-            # instead of collapsing T/N frames in one
+            # Use several small strided reductions instead of one large reduction.
             layers = []
             for i, stride in enumerate(self.strides):
                 if i > 0: layers.append(nn.GELU())

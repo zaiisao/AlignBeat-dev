@@ -26,9 +26,8 @@ def get_fragment_offsets(total_frames, fragment_size, border_size):
     for index, offset in enumerate(offsets):
         first, last = index == 0, index == len(offsets) - 1
 
-        # JA: offset + border_frames is the first beta frames of the fragment B.
-        # offset + fragment_frames - border_frames is the last beta frames of the
-        # fragment A.
+        # Keep each fragment's owned interior; covered_to absorbs overlap when the
+        # final fragment shifts back to the end of the piece.
         keep_start = 0 if first else max(offset + border_size, covered_to)
         keep_end = total_frames if last else offset + fragment_size - border_size
         keep_end = max(keep_end, keep_start)
@@ -78,7 +77,6 @@ def predict_and_stitch_fragments(mel, model, fragment_size, border_size=None):
     fragments_class_logits = fragments_prediction["class_logits"].float()
     fragments_t_hat = fragments_prediction["t_hat"].float()
 
-    # JA: Concatenate the fragments into a single sequence
     kept_logits, kept_frames, kept_fragment = [], [], []
     for index, (offset, keep_start, keep_end) in enumerate(fragment_offsets):
         absolute = offset + fragments_t_hat[index] * fragment_size

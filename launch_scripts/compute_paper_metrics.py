@@ -5,11 +5,8 @@ from pathlib import Path
 import numpy as np
 from pytorch_lightning import Trainer, seed_everything
 
-# Same shim as launch_scripts/train.py: our checkpoints carry numpy scalars, dtypes
-# and PosixPaths in hyper_parameters, and torch >= 2.6 loads with weights_only=True by
-# default, which refuses them. Allowlisting the individual globals is a moving target,
-# so restore the pre-2.6 default for this path. Safe here: these are checkpoints this
-# repo wrote. Do NOT copy this into anything that loads third-party checkpoints.
+# Repo checkpoints contain numpy values and PosixPaths rejected by torch's
+# weights_only=True loader. Use weights_only=False only for checkpoints written here.
 import torch
 _torch_load = torch.load
 def _load_trusted(*a, **k):
@@ -17,12 +14,11 @@ def _load_trusted(*a, **k):
     return _torch_load(*a, **k)
 torch.load = _load_trusted
 
-from alignbeat.integration.data import AlignBeatDataModule
+from beat_this.dataset import BeatDataModule
 from beat_this.inference import load_checkpoint
-from alignbeat.integration.lightning import PLAlignBeat
+from beat_this.model.pl_module import PLBeatThis
 from beat_this.utils import infer_beat_numbers
 
-# for repeatability
 seed_everything(0, workers=True)
 
 
@@ -84,18 +80,14 @@ def format_metric(value):
 def main(args):
     if len(args.models) == 1:
         print("Single model prediction for", args.models[0])
-        # single model prediction
         checkpoint_path = args.models[0]
         checkpoint = load_checkpoint(checkpoint_path)
 
-        # create datamodule
         datamodule = datamodule_setup(checkpoint, args.num_workers, args.datasplit)
-        # create model and trainer
         model, trainer = plmodel_setup(
             checkpoint, args.eval_trim_beats, args.dbn, args.gpu,
             args.read_out, args.stitch_border
         )
-        # predict
         metrics, dataset, preds, piece = compute_predictions(
             model,
             trainer,
@@ -103,12 +95,9 @@ def main(args):
             return_preds=args.dump_predictions,
         )
 
-        # compute averaged metrics
         has_downbeats = downbeat_annotated(datamodule.predict_dataset)
         averaged_metrics = average_metrics(metrics, dataset, has_downbeats)
-        # compute metrics averaged by dataset
         dataset_metrics = average_metrics_by_dataset(metrics, dataset, has_downbeats)
-        # print for dataset
         print("Metrics (downbeat metrics over annotated pieces only)")
         for k, v in averaged_metrics.items():
             print(f"{k}: {v}")
@@ -120,7 +109,6 @@ def main(args):
             print("------")
         if args.dump_piece_metrics:
             write_piece_metrics(args.dump_piece_metrics, piece, dataset, metrics)
-        # dump predictions
         if args.dump_predictions:
             write_predictions(args.dump_predictions, preds, piece)
     else:  # multiple models
@@ -130,11 +118,9 @@ def main(args):
                     "cannot dump predictions when doing inference for multiple models"
                 )
                 return
-            # computing result variability for the same dataset and different model seeds
-            # create datamodule only once, as we assume it is the same for all models
+            # All models use the same dataset, so reuse one datamodule.
             checkpoint = load_checkpoint(args.models[0])
             datamodule = datamodule_setup(checkpoint, args.num_workers, args.datasplit)
-            # create model and trainer
             all_metrics = []
             for checkpoint_path in args.models:
                 checkpoint = load_checkpoint(checkpoint_path)
@@ -146,11 +132,9 @@ def main(args):
                 metrics, dataset, preds, piece = compute_predictions(
                     model, trainer, datamodule.predict_dataloader()
                 )
-                # compute averaged metrics for one model
                 has_downbeats = downbeat_annotated(datamodule.predict_dataset)
                 averaged_metrics = average_metrics(metrics, dataset, has_downbeats)
                 all_metrics.append(averaged_metrics)
-            # compute mean and standard deviations for all model averages
             all_metrics_mean = {
                 k: np.mean([m[k] for m in all_metrics]) for k in all_metrics[0]
             }
@@ -161,13 +145,10 @@ def main(args):
                 k: (all_metrics_mean[k], all_metrics_std[k])
                 for k, v in all_metrics[0].items()
             }
-            # print all metrics
             print("Metrics (downbeat metrics over annotated pieces only)")
             for k, v in all_metrics_stats.items():
-                # round to 3 decimal places
                 print(f"{k}: {round(v[0],3)} +- {round(v[1],3)}")
         elif args.aggregation_type == "k-fold":
-            # computing results in the K-fold setting. Every fold has a different dataset
             all_piece_metrics = []
             all_piece_dataset = []
             all_piece_preds = []
@@ -175,19 +156,16 @@ def main(args):
             # has_downbeats is a per-corpus flag, so the folds agree wherever they
             # overlap; collect it across them because no single fold sees every corpus.
             has_downbeats = {}
-            # create datamodule for each model
             for i_model, checkpoint_path in enumerate(args.models):
                 print(f"Model {i_model+1}/{len(args.models)}")
                 checkpoint = load_checkpoint(checkpoint_path)
                 datamodule = datamodule_setup(
                     checkpoint, args.num_workers, args.datasplit
                 )
-                # create model and trainer
                 model, trainer = plmodel_setup(
                     checkpoint, args.eval_trim_beats, args.dbn, args.gpu,
                     args.read_out, args.stitch_border
                 )
-                # predict
                 metrics, dataset, preds, piece = compute_predictions(
                     model,
                     trainer,
@@ -200,14 +178,13 @@ def main(args):
                 if preds is not None:
                     all_piece_preds.extend(preds)
                 all_piece.append(piece)
-            # aggregate across folds
             all_piece_metrics = {
                 k: np.concatenate([m[k] for m in all_piece_metrics])
                 for k in all_piece_metrics[0]
             }
             all_piece_dataset = np.concatenate(all_piece_dataset)
             all_piece = np.concatenate(all_piece)
-            # double check that there are no errors in the fold and there are not repeated pieces
+            # Each piece should occur in exactly one fold.
             assert len(all_piece) == len(
                 np.unique(all_piece)
             ), "There are repeated pieces in the folds"
@@ -217,9 +194,7 @@ def main(args):
             dataset_metrics = average_metrics_by_dataset(
                 all_piece_metrics, all_piece_dataset, has_downbeats
             )
-            # The k-fold average over every held-out piece: this is the number the paper
-            # tables report, so print it here rather than leaving it to be recomputed
-            # from the per-dataset means (which would weight corpora, not pieces).
+            # Pool pieces before averaging so each held-out piece has equal weight.
             averaged_metrics = average_metrics(
                 all_piece_metrics, all_piece_dataset, has_downbeats
             )
@@ -232,14 +207,12 @@ def main(args):
             )
             for k, v in averaged_metrics.items():
                 print(f"{k}: {round(v,4)}")
-            # print for dataset
             print("Dataset metrics")
             for k, v in dataset_metrics.items():
                 print(k)
                 for d, value in v.items():
                     print(f"{d}: {format_metric(value)}")
                 print("------")
-            # dump predictions
             if args.dump_predictions:
                 write_predictions(args.dump_predictions, all_piece_preds, all_piece)
         else:
@@ -247,19 +220,16 @@ def main(args):
 
 
 def datamodule_setup(checkpoint, num_workers, datasplit):
-    # Load the datamodule
     print("Creating datamodule")
     data_dir = Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
     datamodule_hparams = dict(checkpoint["datamodule_hyper_parameters"])
-    # Checkpoints written before the knob moved to alignbeat.training.priors record it here;
-    # scoring never masks anything. Drop when those are retrained.
+    # Older checkpoints recorded this training-only option; evaluation never applies it.
     datamodule_hparams.pop("downbeat_dropout", None)
-    # update the hparams with the ones from the arguments
     if num_workers is not None:
         datamodule_hparams["num_workers"] = num_workers
     datamodule_hparams["predict_datasplit"] = datasplit
     datamodule_hparams["data_dir"] = data_dir
-    datamodule = AlignBeatDataModule(**datamodule_hparams)
+    datamodule = BeatDataModule(**datamodule_hparams)
     datamodule.setup(stage="predict")
     return datamodule
 
@@ -285,38 +255,34 @@ def plmodel_setup(checkpoint, eval_trim_beats, dbn, gpu, read_out=None,
         checkpoint["hyper_parameters"]["use_dbn"] = dbn
 
     hparams = dict(checkpoint["hyper_parameters"])
-    # Checkpoints predating subset_head record head_type instead. Translate, rather than
-    # dropping it: without it they would silently rebuild with the dense head.
+    # Map legacy head names so old AlignBeat checkpoints do not load as dense models.
+    legacy_alignbeat = hparams.pop("subset_head", None)
     head_type = hparams.pop("head_type", None)
-    hparams.setdefault("subset_head", head_type == "subset")
-    # A training-only knob the all-data checkpoints recorded and the module no longer
-    # takes; nothing about inference reads a learning rate.
+    if "alignbeat" not in hparams:
+        hparams["alignbeat"] = (legacy_alignbeat if legacy_alignbeat is not None
+                                else head_type == "subset")
+    # Drop the training-only learning-rate option saved in older checkpoints.
     hparams.pop("head_lr", None)
-    # Knobs retired since these were trained: every checkpoint recorded the only
-    # value that survived, so dropping them changes nothing.
+    # Remove obsolete options no longer accepted by PLBeatThis.
     RETIRED = {"time_param", "tau", "stitch_border", "decode", "loss_event_term",
                "refine_meter", "duration_conditioned"}
     if hparams.get("subset_kwargs"):
         hparams["subset_kwargs"] = {k: v for k, v in hparams["subset_kwargs"].items()
                                     if k not in RETIRED}
-        # read_out postdates every checkpoint, so it can only come from the command
-        # line. stitch_border is set after the RETIRED filter on purpose: that strips the
-        # stale value old checkpoints recorded, leaving section 9.3's D/N default, and
-        # this then overrides it for a sweep.
+        # These decode options are supplied at evaluation time; old checkpoints do not
+        # contain the current settings.
         if read_out is not None:
             hparams["subset_kwargs"]["read_out"] = read_out
         if stitch_border is not None:
             hparams["subset_kwargs"]["stitch_border"] = stitch_border
-    model = PLAlignBeat(**hparams)
+    model = PLBeatThis(**hparams)
     model.load_state_dict(checkpoint["state_dict"])
-    # set correct device and accelerator
     if gpu >= 0:
         devices = [gpu]
         accelerator = "gpu"
     else:
         devices = 1
         accelerator = "cpu"
-    # create trainer
     trainer = Trainer(
         accelerator=accelerator,
         devices=devices,
@@ -341,7 +307,6 @@ def compute_predictions(model, trainer, predict_dataloader, return_preds=False):
         preds = None
     dataset = np.asarray([o[2][0] for o in out])
     piece = np.asarray([o[3][0] for o in out])
-    # convert metrics from list of per-batch dictionaries to a single dictionary with np arrays as values
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece
 

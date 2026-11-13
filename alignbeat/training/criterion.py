@@ -29,24 +29,15 @@ class SubsetCriterion(nn.Module):
                  tempo_relative_b=False):
         super(SubsetCriterion, self).__init__()
 
-        self.window_seconds = float(window_seconds) # JA: This is 30 seconds in Beat This
+        self.window_seconds = float(window_seconds)
 
-        # Time is modelled as a Laplace of scale b, whose NLL is |dt| / b, and b is taken
-        # as eps/2 where eps is the F-measure tolerance in the same fragment-fraction
-        # units: lambda_L1 = 1/b = 2/eps. So being half a tolerance out in time costs one
-        # nat of class log-probability, and the Laplace puts 1 - e^-2 = 86% of its mass
-        # inside the tolerance.
-        #
-        # Fixed from the tolerance rather than estimated by eq. (5): that EMA ran
-        # 73 -> 28 ms over one run, steepening the exchange rate into a gate as the
-        # regression sharpened.
+        # Choose the Laplace scale so a residual of half the F-measure tolerance costs
+        # one nat: b = eps / (2 * window_seconds) on the normalized time axis.
         self.laplace_b = F_MEASURE_TOLERANCE / (2.0 * self.window_seconds)
         self.lambda_l1 = 1.0 / self.laplace_b
 
-        # With tempo_relative_b the scale becomes CONTINUITY_TOLERANCE * T instead, T
-        # being the piece's own beat period: the continuity metrics' acceptance radius
-        # for that piece rather than the F-measure's absolute one. The two coincide at
-        # 150 BPM. Pieces reporting no period keep laplace_b.
+        # Optionally use the piece's beat period for a tempo-relative scale; missing
+        # periods fall back to laplace_b.
         self.tempo_relative_b = bool(tempo_relative_b)
         self.gamma = gamma
 
@@ -63,11 +54,8 @@ class SubsetCriterion(nn.Module):
         data_priors = torch.tensor([data_prior["downbeat"], data_prior["beat"]],
                                     dtype=torch.float32)
 
-        # JA: We are assuming for now that the document's pi_data is the same as pi_C
-        # A buffer, not a bare attribute, so .double() and .cuda() reach it: left as a
-        # plain tensor it stays float32 on the CPU while the rest of the E-step runs in
-        # float64, which put a float32 epsilon into pi and broke Fisher's identity at
-        # the 1e-08 level. Not persistent: no checkpoint records it.
+        # Set pi_C to the training-set class prior pi_data. Keep it as a nonpersistent
+        # buffer so dtype and device conversions follow the criterion.
         self.register_buffer("class_prior", data_priors.clone(), persistent=False)
 
         self.register_buffer("data_prior", data_priors / data_priors.sum())
@@ -140,9 +128,8 @@ class SubsetCriterion(nn.Module):
                 scores_by_meter = meter_phase_scores(
                     matched_class_posterior, self.meter_candidates, self.meter_prior)
                 if scores_by_meter:
-                    # Line 40: pi_{omega,L} <- that numerator over its own sum across every
-                    # (omega, L) pair. This is the E-step's whole output. Everything the M-step needs
-                    # is a function of pi and of theta, so nothing else crosses the boundary.
+                    # Normalize the joint scores over all (omega, L) hypotheses to get
+                    # the frozen posterior used by the M-step.
                     flat = torch.cat([scores_by_meter[meter] for meter in scores_by_meter])
                     pi = flat / flat.sum()
 
@@ -166,7 +153,6 @@ class SubsetCriterion(nn.Module):
                     else self._event_only_term(matched_class_probs))
             num_unlabeled = len(gt_class)
         else:
-            # JA: The input music has both downbeat and beat labels
             event_indices = torch.arange(len(gt_class), device=gt_class.device)
             term = -matched_class_probs[event_indices, gt_class].sum()
 
@@ -207,7 +193,6 @@ class SubsetCriterion(nn.Module):
         """One EM step per fragment; returns (losses, stats)."""
         batch_size, num_candidates, _ = class_logits.shape
 
-        # JA: log_probabilities is the log probabilities of all N candidates
         log_probabilities = F.log_softmax(class_logits, dim=-1)
 
         class_terms, time_terms, background_terms = [], [], []
@@ -233,9 +218,8 @@ class SubsetCriterion(nn.Module):
                       flush=True)
                 continue
 
-            # E-step: sigma_hat under the current theta (Algorithm 1, lines 4-40)
-            # One scale per fragment, shared by both halves: the M-step must ascend the
-            # likelihood the E-step resolved sigma under.
+            # The E-step fixes sigma under the current parameters; the M-step uses the
+            # same fragment scale to optimize against that match.
             scale = self._scale_for(targets[b])
             match = self._e_step(class_logits[b], t_hat[b], gt_class, gt_time, scale)
 

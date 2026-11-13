@@ -1,7 +1,8 @@
 """The alignment head's training and inference steps.
 
-Free functions over the Lightning module rather than methods on it: PLAlignBeat
-(lightning.py) calls them from its overrides of upstream's steps.
+Free functions over the Lightning module rather than methods on it: PLBeatThis
+calls them from four guard clauses, which keeps beat_this/ at a handful of edited
+lines instead of carrying 150 of ours.
 """
 import numpy as np
 import torch
@@ -41,12 +42,8 @@ def subset_targets(batch, fps):
             classes = np.where(np.isin(beats, downbeats), CLASS_DOWNBEAT, CLASS_BEAT)
         else:
             classes = np.full(len(beats), CLASS_UNKNOWN)
-        # JA: Normalize the times into 0 to 1 range
-        # The piece's beat period in the same fragment-fraction units as "times", so
-        # the criterion never converts to seconds: |dt| / (theta * T) is invariant to
-        # the normalisation, both being divided by the same window. 0.0 means the piece
-        # carried too few beats to measure one; the criterion falls back to its fixed
-        # scale. .get() because checkpoints predating this key still decode through here.
+        # Normalize the period to the event-time units. Zero triggers the criterion's
+        # fixed-scale fallback; .get() supports checkpoints without beat_period.
         period_seconds = float(batch["beat_period"][index]) if "beat_period" in batch else 0.0
 
         targets.append({
@@ -66,7 +63,7 @@ def subset_decode(criterion, batch, model_prediction, fps, *, detect_tau,
     events the excerpt holds, so it is weaker than at piece scope but not ill-defined.
 
     stitch_border is accepted and ignored: an excerpt is already one fragment, so there
-    are no seams to trim. It is in the signature because PLAlignBeat splats one
+    are no seams to trim. It is in the signature because PLBeatThis splats one
     decode_kwargs into both this and subset_predict_piece, where it does apply.
     """
     num_frames = batch["truth_beat"].shape[-1]
@@ -110,9 +107,7 @@ def subset_predict_piece(model, criterion, batch, chunk_size, fps, *, detect_tau
         batch["spect"][0], model, chunk_size, border_size=stitch_border)
 
     if read_out == "map":
-        # Algorithm 5's own Require line is a fragment, and one (omega, L) across a whole
-        # piece costs 10.74 downbeat F, so this read-out is decoded within each fragment
-        # and the labelled events concatenated afterwards.
+        # Decode each fragment independently before concatenating its labelled events.
         parts = [decode(class_logits[fragment == f], frames_of_fragments[fragment == f],
                         criterion.meter_prior, tau=detect_tau, read_out=read_out)
                  for f in fragment.unique()]

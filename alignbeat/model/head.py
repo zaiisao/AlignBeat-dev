@@ -89,9 +89,6 @@ class SubsetSelectionHead(nn.Module):
 
         self.input_norm = nn.LayerNorm(feature_size)
 
-        # JA: Trunk is from the tree metaphor: one shared trunk, then branches. Here
-        # self.trunk is the single shared path every candidate feature goes through,
-        # and class_head and regression_head are the two branches that split off it
         self.trunk = nn.Sequential(
             nn.Linear(feature_size, hidden_size),
             nn.LayerNorm(hidden_size),
@@ -133,7 +130,6 @@ class SubsetSelectionHead(nn.Module):
         z = self.input_norm(x.transpose(1, 2))      # (B, N, C)
         z = self.trunk(z)
 
-        # JA: regression_head reduces 256-dim features to 1-d
         r = self.regression_head(z).squeeze(dim=2)      # (B, N)
         t_hat = monotonic_times(r)
 

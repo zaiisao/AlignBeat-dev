@@ -4,11 +4,9 @@ from pathlib import Path
 
 import torch
 
-# Our own checkpoints carry numpy scalars and dtypes in hyper_parameters, and torch
-# >= 2.6 loads with weights_only=True by default, which refuses them. Allowlisting the
-# individual globals is a moving target (scalar, then dtype[float64], ...), so restore
-# the pre-2.6 default for the resume path. Safe here: these are checkpoints this repo
-# wrote. Do NOT copy this into anything that loads third-party checkpoints.
+# Repo checkpoints contain numpy values rejected by torch's weights_only=True loader.
+# Use weights_only=False only for checkpoints written by this project, never for
+# third-party checkpoints.
 _torch_load = torch.load
 def _load_trusted(*a, **k):
     # Lightning passes weights_only=True EXPLICITLY, so setdefault is not enough.
@@ -19,13 +17,13 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from alignbeat.integration.data import AlignBeatDataModule
+from beat_this.dataset import BeatDataModule
 from alignbeat.constants import BPM_MAX
 from alignbeat.model.downsample import stages_from_tempo
 from alignbeat.training.priors import (apply_downbeat_dropout, drop_beat_only_pieces,
                                get_train_class_prior, get_train_meter_prior,
                                get_train_positive_weights)
-from alignbeat.integration.lightning import PLAlignBeat
+from beat_this.model.pl_module import PLBeatThis
 
 
 def main(args):
@@ -74,7 +72,7 @@ def main(args):
             "max_parts": 9,
         }
 
-    datamodule = AlignBeatDataModule(
+    datamodule = BeatDataModule(
         data_dir,
         batch_size=args.batch_size,
         spect_fps=args.fps,
@@ -93,9 +91,8 @@ def main(args):
 
     datamodule.setup(stage="fit")
 
-    # Before any prior is measured: the annotation-coverage ablation hides downbeats
-    # from training, and a prior read off the unmasked split would describe data the
-    # model never sees.
+    # Apply annotation dropout before measuring priors, so they reflect the labels
+    # available to the model.
     if args.downbeat_dropout:
         dropped = apply_downbeat_dropout(datamodule.train_dataset, args.downbeat_dropout)
         print(f"[downbeat-dropout] {args.downbeat_dropout:g}: hid downbeats on "
@@ -106,13 +103,10 @@ def main(args):
         print(f"[drop-beat-only] removed {removed_count} excerpts carrying no downbeat "
               f"annotation", flush=True)
 
-    # compute positive weights
     pos_weights = get_train_positive_weights(datamodule, widen_target_mask=3)
     print("Using positive weights: ", pos_weights)
 
-    # The latent bar lives in the alignment head's E-step; the dense head has no
-    # subset_criterion to switch it off in, so the flag would pass silently. Refuse,
-    # rather than report a bar ablation from a run that never had a bar.
+    # Reject this option for the dense head, which has no latent bar to disable.
     if not args.latent_bar and args.head_type != "subset":
         parser.error("--no-latent_bar requires --head_type subset: the dense head has "
                      "no latent bar to remove, it masks its downbeat loss instead.")
@@ -120,15 +114,11 @@ def main(args):
     meter_prior = data_prior = None
     if args.head_type == "subset":
         if args.dbn:
-            # The DBN postprocessor consumes frame-wise activations; the alignment head
-            # emits per-candidate events and never builds them, so use_dbn would be
-            # silently ignored. Refuse rather than report DBN numbers that were not
-            # produced by one.
+            # The alignment head emits events, not framewise activations for the DBN.
             parser.error("--dbn is not supported with --head_type subset: the alignment "
                          "head emits events, not the frame-wise activations a DBN needs.")
 
-        # pi_M from THIS fold's training split, so no validation or test track informs a
-        # prior the model then uses.
+        # Estimate priors from this fold's training split only.
         meter_prior = get_train_meter_prior(datamodule.train_dataset, candidates=meter_candidates)
         data_prior = get_train_class_prior(datamodule.train_dataset)
         print("Using meter prior: ", {L: round(p, 5) for L, p in sorted(meter_prior.items())})
@@ -150,7 +140,7 @@ def main(args):
           f"{args.train_length} (tempo floor at {args.bpm_max} bpm: {tempo_floor})",
           flush=True)
 
-    pl_model = PLAlignBeat(
+    pl_model = PLBeatThis(
         spect_dim=128,
         fps=50,
         transformer_dim=args.transformer_dim,
@@ -169,12 +159,8 @@ def main(args):
         eval_trim_beats=args.eval_trim_beats,
         sum_head=args.sum_head,
         partial_transformers=args.partial_transformers,
-        # Everything the alignment head needs travels in one dict, which pl_module
-        # routes to the head, to itself, and to the criterion. A knob implemented but
-        # with no path from the CLI is worse than one that is absent: an ablation of it
-        # shows no difference and reads as "the idea does not help", when in fact it
-        # never ran.
-        subset_head=args.head_type == "subset",
+        # Group AlignBeat head, decode, and criterion options for routing in PLBeatThis.
+        alignbeat=args.head_type == "subset",
         subset_kwargs=None if args.head_type != "subset" else {
             # architecture and decode
             "num_candidates": num_candidates,
@@ -193,11 +179,7 @@ def main(args):
         },
     )
 
-    # --- frozen-encoder head swap -------------------------------------------------
-    # Isolates "is the encoder good enough" from "is the head lossy". Both arms share
-    # the identical frontend + transformer_blocks and differ only in task_heads, so
-    # loading a converged encoder and training ONLY the head answers whether the
-    # candidate representation can express what the dense per-frame one can.
+    # --- optional encoder initialization ------------------------------------------
     if args.init_encoder_from:
         blob = torch.load(args.init_encoder_from, map_location="cpu", weights_only=False)
         src = blob["state_dict"]
@@ -219,13 +201,7 @@ def main(args):
               flush=True)
 
     if args.init_all_from:
-        # Full-model init (encoder AND head), no optimizer/epoch state: start a FRESH
-        # schedule from an already-converged system. Used for the thaw experiment --
-        # take the frozen-encoder run (vanilla encoder + head trained on top of it, a
-        # converged pair) and release the encoder underneath a head that already works.
-        # This separates a TRANSIENT cause of the end-to-end inversion (a random head
-        # damages a good encoder early) from a STEADY-STATE one (the loss degrades
-        # encoders no matter what).
+        # Load model weights only; the optimizer and training schedule start fresh.
         blob = torch.load(args.init_all_from, map_location="cpu", weights_only=False)
         missing, unexpected = pl_model.load_state_dict(blob["state_dict"], strict=False)
         crit = [k for k in missing if "frontend" in k or "transformer_blocks" in k or "task_heads" in k]
@@ -255,13 +231,8 @@ def main(args):
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
     if args.snapshot_every:
-        # Keep a checkpoint per N epochs instead of overwriting one file. Validation
-        # reads WHOLE pieces (571 songs of ~95 s) rather than 30 s training crops, so on
-        # a shared machine it is the dominant disk cost -- measured at 11-12% iowait with
-        # several jobs blocked in D state, dropping training from 6.1 to 0.86 it/s.
-        # Snapshotting lets training run with validation disabled entirely
-        # (--val-frequency larger than --max-epochs) and the curve reconstructed
-        # afterwards by scoring the snapshots.
+        # Save periodic snapshots so training can run without validation and be scored
+        # afterward.
         callbacks.append(
             ModelCheckpoint(
                 every_n_epochs=args.snapshot_every,
@@ -272,7 +243,6 @@ def main(args):
             )
         )
     else:
-        # save only the last model
         callbacks.append(
             ModelCheckpoint(
                 every_n_epochs=1,
@@ -327,10 +297,7 @@ if __name__ == "__main__":
         default=0.2,
         help="dropout rate to apply in the main transformer blocks",
     )
-    # No single default is right for both heads: the dense control loses 0.025 joint at
-    # 3e-4 (0.894 vs 0.919), while the subset head collapses at 8e-4 (0.617 at ep4 ->
-    # 0.545 at ep9). Left unset, the rate is resolved from --head_type in main(); an
-    # explicit --lr still wins.
+    # Resolve the head-specific learning-rate default in main(); an explicit --lr wins.
     parser.add_argument("--lr", type=float, default=None,
                         help="default: 3e-4 for --head_type subset, 8e-4 for dense")
     parser.add_argument("--weight-decay", type=float, default=0.01)
@@ -361,10 +328,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--accumulate-grad-batches", type=int, default=8)
     # --- order-preserving alignment head -------------------------------------------
-    # Everything before the head is shared with the dense baseline, so
-    # "--head_type subset" against the default is a controlled A/B: same encoder, data,
-    # augmentation, trainer, precision and metrics, differing only in the head and the
-    # loss it brings with it.
+    # The dense and alignment heads share the encoder, data, augmentation, and trainer.
     parser.add_argument("--snapshot_every", type=int, default=0,
                         help="keep a checkpoint every N epochs (0 = overwrite one file); "
                              "pair with a large --val-frequency to train without eval")
@@ -407,8 +371,8 @@ if __name__ == "__main__":
                              "all (default: %(default)s)")
     parser.add_argument("--meter_candidates", type=str, default="2,3,4,5,6,8",
                         help="candidate meters M the beat-only E-step marginalises "
-                             "over, e.g. 2,3,4,6; pi_M is this fold's training-split "
-                             "meter distribution, renormalised over these")
+                             "over, e.g. 2,3,4,6; the corpus meter prior is "
+                             "renormalised over these")
     parser.add_argument("--bpm_max", type=float, default=BPM_MAX,
                         help=f"fastest tempo the corpus contains (default {BPM_MAX:g}); "
                              "N is derived from it and the window length")
@@ -426,10 +390,7 @@ if __name__ == "__main__":
                         help="DEVIATION, on by default: charge line 20's -log(1 - p(empty)) to an "
                              "unlabelled event, so the beat-only matching is not "
                              "decided by time alone")
-    # NOTE: --train_length (underscore) is defined above and owns dest=train_length.
-    # A second "--train-length" action used to be declared here with its own default;
-    # both wrote the same dest, so whichever was declared later silently won. Kept as a
-    # pure alias so existing command lines keep working, with no competing default.
+    # Alias without a default so it cannot overwrite --train_length's default.
     parser.add_argument("--train-length", dest="train_length", type=int,
                         help="alias of --train_length")
     parser.add_argument(
