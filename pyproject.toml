@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alignbeat"
-version = "0.1.0"
-description = "AlignBeat: multi-class beat and downbeat tracking from partially labeled data, built on Beat This!"
+version = "1.0.0"
+description = "AlignBeat: beat and downbeat tracking with latent order-preserving alignment, built on Beat This!"
 readme = "README.md"
 classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Multimedia :: Sound/Audio :: Analysis",
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3",
 ]
 authors = [
@@ -19,18 +19,22 @@ authors = [
     {name = "Moon-Ryul Jung"},
 ]
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
 dependencies = [
-    # AlignBeat subclasses Beat This!'s model, data module and Lightning module, so
-    # the version is pinned to the release it was verified against.
-    "beat-this==1.1.0",
     "numpy>=1.20",
     "torch>=2",
+    "torchaudio",
+    "einops",
+    "rotary-embedding-torch",
+    "soxr",
     "librosa",
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 
 [project.optional-dependencies]
+test = [
+    "pytest",
+]
 train = [
     "pytorch-lightning",
     "pandas",
@@ -40,9 +44,19 @@ train = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["alignbeat*"]
+include = ["beat_this*", "alignbeat*"]
 
 [project.urls]
 Repository = "https://github.com/zaiisao/AlignBeat"
-Paper = "https://arxiv.org/abs/2510.14391"
+Paper = "https://arxiv.org/abs/2510.14391v3"
 Upstream = "https://github.com/CPJKU/beat_this"
+
+[project.scripts]
+beat_this = "beat_this.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "integration: exercises pretrained inference or external backends",
+    "slow: may take substantially longer than the unit tests",
+]
