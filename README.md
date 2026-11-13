@@ -15,12 +15,17 @@ earlier working drafts and may differ from the linked preprint.
 
 ## Setup and data
 
-Use Python 3.10 or newer. Install PyTorch and torchaudio for your platform, then
-run this from the repository root:
+Create and activate the tested Linux CUDA environment from the repository root:
 
 ```sh
-pip install -e ".[train]"
+conda env create -f environment.yml
+conda activate alignbeat
 ```
+
+The environment includes the training, evaluation, preprocessing, and test
+dependencies. It uses the PyTorch 2.7.1 CUDA 11.8 wheels; for CPU or a different
+CUDA build, edit the `torch` and `torchaudio` entries in `environment.yml` to use
+the matching wheels for your platform.
 
 The distribution is named `alignbeat` and includes both local Python packages,
 `alignbeat` and `beat_this`. The inherited `beat_this` command runs the upstream
@@ -94,8 +99,9 @@ test set. `--read-out` can select `per_event`, `map`, or `duration` decoding;
 `--stitch-border` overrides the fragment border. The script also accepts
 `--dump-piece-metrics` and `--dump-predictions` for saving its outputs.
 
-`tests/` contains mathematical checks and regression tests. Install test and
-training dependencies with `pip install -e ".[test,train]"`; run the quick suite with
+`tests/` contains mathematical checks and regression tests. Install test, training,
+and preprocessing dependencies with
+`pip install -e ".[test,train,preprocess]"`; run the quick suite with
 `python -m pytest -m 'not integration and not slow'`. The pretrained inference
 checks are marked `integration`, and the `torch.compile` check is marked `slow`.
 
