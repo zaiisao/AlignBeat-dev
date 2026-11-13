@@ -24,6 +24,13 @@ from alignbeat.training.dp import subset_posterior_marginals, subset_select_dp, 
 METER_PRIOR = {2: 0.0447, 3: 0.0838, 4: 0.8612, 5: 0.0011, 6: 0.0068, 8: 0.0017}
 
 
+def test_criterion_defaults_match_paper_configuration():
+    criterion = SubsetCriterion(DATA_PRIOR, WINDOW_SECONDS)
+    assert criterion.gamma == 1.0
+    assert criterion.match_event_cost is True
+    assert criterion.latent_bar is False
+
+
 def _targets(M=40, seed=0):
     torch.manual_seed(seed)
     N = 160

@@ -316,10 +316,9 @@ def test_decode_no_duplicates_and_sorted():
 # Section 7.1: beat-only datasets (SMC), where the B/DB distinction is not annotated
 # --------------------------------------------------------------------------------
 
-def test_beat_only_events_carry_no_class_cost():
-    """Algorithm 1 line 20: a CLASS_UNKNOWN event says an event occurred without saying
-    which kind, so no class term distinguishes one candidate from another and the pair
-    costs the timing error alone. A labelled event still pays line 18's own NLL."""
+def test_beat_only_events_pay_active_event_mass_cost():
+    """A beat-only event pays the negative log probability of either active class,
+    while a labelled event pays its own class NLL."""
     from alignbeat.constants import CLASS_UNKNOWN
     N = 8
     log_p = torch.log(torch.tensor([[0.25, 0.6, 0.15]]).repeat(N, 1))
@@ -329,11 +328,18 @@ def test_beat_only_events_carry_no_class_cost():
     gt_t = t_hat[:1].clone()
     unknown = crit.build_l_match(log_p, t_hat, torch.tensor([CLASS_UNKNOWN]), gt_t)
     time_only = crit.lambda_l1 * (t_hat[None, :] - gt_t[:, None]).abs()
-    assert torch.allclose(unknown, time_only, atol=1e-6)
+    active_mass_cost = -torch.logsumexp(log_p[:, [CLASS_DOWNBEAT, CLASS_BEAT]], dim=-1)
+    assert torch.allclose(unknown, time_only + active_mass_cost[None, :], atol=1e-6)
+
+    without_event_cost = SubsetCriterion(
+        DATA_PRIOR, WINDOW_SECONDS, match_event_cost=False)
+    unknown_without_cost = without_event_cost.build_l_match(
+        log_p, t_hat, torch.tensor([CLASS_UNKNOWN]), gt_t)
+    assert torch.allclose(unknown_without_cost, time_only, atol=1e-6)
 
     known = crit.build_l_match(log_p, t_hat, torch.tensor([CLASS_DOWNBEAT]), gt_t)
     assert np.isclose(float((known - time_only)[0, 0]), -np.log(0.25), atol=1e-5)
-    print("ok: line 20 leaves the class channel out, line 18 pays its own NLL")
+    print("ok: beat-only matching pays active event mass; labelled events pay class NLL")
 
 
 def test_beat_only_cost_is_invariant_to_b_db_split():

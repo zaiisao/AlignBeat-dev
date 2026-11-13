@@ -70,7 +70,7 @@ window at 50 frames per second (30 seconds).
 
 ```sh
 # AlignBeat and the dense Beat This! baseline
-python launch_scripts/train.py --name alignbeat_f0 --head_type subset --fold 0
+python launch_scripts/train.py --name alignbeat_f0 --fold 0
 python launch_scripts/train.py --name dense_f0 --head_type dense --fold 0
 ```
 
@@ -81,8 +81,8 @@ for the same fold:
 mkdir -p checkpoints
 curl -L https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/fold0.ckpt \
     -o checkpoints/beat-this-fold0.ckpt
-python launch_scripts/train.py --name alignbeat_f0 --head_type subset --fold 0 \
-    --init_encoder_from checkpoints/beat-this-fold0.ckpt --max-epochs 20
+python launch_scripts/train.py --name alignbeat_f0 --fold 0 \
+    --init_encoder_from checkpoints/beat-this-fold0.ckpt
 ```
 
 The current training CLI exposes the following settings. These are its defaults,
@@ -90,21 +90,22 @@ not a claim that every historical checkpoint used the same configuration.
 
 | flag | default | effect |
 | --- | --- | --- |
-| `--head_type` | `dense` | selects the dense Beat This! head or AlignBeat's `subset` head |
+| `--head_type` | `subset` | selects the dense Beat This! head or AlignBeat's `subset` head |
+| `--max-epochs` | `20` | maximum training epochs |
 | `--attention_layers` | `2` | candidate attention layers in the classification branch |
 | `--detect_tau` | `0.5` | threshold on candidate event probability |
 | `--match_event_cost` | enabled | includes beat-only event probability in matching; `--no-match_event_cost` disables it |
-| `--latent_bar` | enabled | uses shared meter/phase marginalization for beat-only data; `--no-latent_bar` selects independent event-class marginalization |
+| `--latent_bar` | disabled | enables an additional shared meter/phase marginalization for beat-only data |
 | `--gamma` | `1.0` | background loss coefficient |
 | `--tempo_relative_b` | disabled | uses a piece's beat period to scale the timing loss |
 | `--onset_adjustment` | disabled | adds onset-strength calibration to the event probabilities |
 | `--drop_beat_only` | disabled | excludes pieces without downbeat annotations |
 | `--downbeat_dropout` | `0.0` | hides downbeat annotations on a fraction of training pieces |
 
-Direct construction of `SubsetCriterion` currently defaults to `gamma=0.5` and
-`match_event_cost=False`, unlike the CLI. Specify these settings explicitly when
-using the criterion outside the launcher. The default learning rate is `3e-4`
-for the subset head and `8e-4` for the dense head unless `--lr` is supplied.
+The subset head's default loss settings follow the paper: `gamma=1.0`, active-event
+mass in beat-only matching, and no latent meter/phase marginalization. The default
+learning rate is `3e-4` for the subset head and `8e-4` for the dense head unless
+`--lr` is supplied.
 
 Run `python launch_scripts/train.py --help` for the complete option list.
 

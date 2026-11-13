@@ -24,8 +24,8 @@ class SubsetCriterion(nn.Module):
     """Per-pair cost (3), the selection DP, and the training loss (8)."""
 
     def __init__(self,
-                 data_prior, window_seconds, gamma=0.5,
-                 meter_prior=None, match_event_cost=False, latent_bar=True,
+                 data_prior, window_seconds, gamma=1.0,
+                 meter_prior=None, match_event_cost=True, latent_bar=False,
                  tempo_relative_b=False):
         super(SubsetCriterion, self).__init__()
 

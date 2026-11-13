@@ -107,9 +107,9 @@ def main(args):
     print("Using positive weights: ", pos_weights)
 
     # Reject this option for the dense head, which has no latent bar to disable.
-    if not args.latent_bar and args.head_type != "subset":
-        parser.error("--no-latent_bar requires --head_type subset: the dense head has "
-                     "no latent bar to remove, it masks its downbeat loss instead.")
+    if args.latent_bar and args.head_type != "subset":
+        parser.error("--latent_bar requires --head_type subset: the dense head has "
+                     "no latent bar to marginalise.")
 
     meter_prior = data_prior = None
     if args.head_type == "subset":
@@ -321,7 +321,7 @@ if __name__ == "__main__":
         "--warmup-steps", type=int, default=1000, help="warmup steps for optimizer"
     )
     parser.add_argument(
-        "--max-epochs", type=int, default=100, help="max epochs for training"
+        "--max-epochs", type=int, default=20, help="max epochs for training"
     )
     parser.add_argument(
         "--batch-size", type=int, default=8, help="batch size for training"
@@ -332,7 +332,7 @@ if __name__ == "__main__":
     parser.add_argument("--snapshot_every", type=int, default=0,
                         help="keep a checkpoint every N epochs (0 = overwrite one file); "
                              "pair with a large --val-frequency to train without eval")
-    parser.add_argument("--head_type", type=str, default="dense",
+    parser.add_argument("--head_type", type=str, default="subset",
                         choices=["dense", "subset"])
     parser.add_argument("--train_length", type=int, default=1500,
                         help="T, the excerpt length in frames; N is derived from it")
@@ -353,12 +353,10 @@ if __name__ == "__main__":
                         help="Algorithm 5 line 3's own threshold on the event mass "
                              "1 - p(empty), which decides which candidates are emitted "
                              "as events at all (default: %(default)s)")
-    parser.add_argument("--latent_bar", default=True,
+    parser.add_argument("--latent_bar", default=False,
                         action=argparse.BooleanOptionalAction,
-                        help="Marginalise a beat-only fragment over the bar (omega, L). "
-                             "With --no-latent_bar such a fragment asserts only that an "
-                             "event occurred, which is the supervision a masked binary "
-                             "downbeat head gets from the same annotation")
+                        help="Extend beat-only supervision by marginalising over bar "
+                             "phase and meter (default: disabled, matching the paper)")
     parser.add_argument("--tempo_relative_b", action="store_true",
                         help="Scale the timing Laplace by the piece's own beat period: "
                              "b = CONTINUITY_TOLERANCE * T, the continuity metrics' "
@@ -387,9 +385,8 @@ if __name__ == "__main__":
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--match_event_cost", default=True,
                         action=argparse.BooleanOptionalAction,
-                        help="DEVIATION, on by default: charge line 20's -log(1 - p(empty)) to an "
-                             "unlabelled event, so the beat-only matching is not "
-                             "decided by time alone")
+                        help="Charge the beat-only event mass -log(1 - p(empty)) in "
+                             "matching, as in the paper (default: enabled)")
     # Alias without a default so it cannot overwrite --train_length's default.
     parser.add_argument("--train-length", dest="train_length", type=int,
                         help="alias of --train_length")

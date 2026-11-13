@@ -32,7 +32,11 @@ METER_PRIOR = {2: 0.09928, 3: 0.05, 4: 0.7943, 5: 0.01, 6: 0.03, 8: 0.01642}
 
 
 def criterion():
-    return SubsetCriterion(data_prior=DATA_PRIOR, window_seconds=WINDOW_SECONDS, meter_prior=METER_PRIOR).double()
+    # These tests verify the extended latent-meter/phase EM path, independently of
+    # the paper-faithful defaults used for new AlignBeat training.
+    return SubsetCriterion(data_prior=DATA_PRIOR, window_seconds=WINDOW_SECONDS,
+                           meter_prior=METER_PRIOR, latent_bar=True,
+                           match_event_cost=False).double()
 
 
 def logits(M, seed):

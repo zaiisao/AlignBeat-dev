@@ -24,9 +24,14 @@ def l_match_loop(criterion, log_probabilities, t_hat, gt_class, gt_time):
     l_match = torch.empty(len(gt_class), len(t_hat), dtype=log_probabilities.dtype)
     for i, (c_i, t_i) in enumerate(zip(gt_class, gt_time)):
         for j in range(len(t_hat)):
-            # Line 18 charges the observed class's NLL; line 20 has no class to charge.
-            class_cost = (0.0 if c_i == CLASS_UNKNOWN
-                          else -float(log_probabilities[j, c_i]))
+            # Labelled events pay their class NLL. Beat-only events pay the active
+            # event mass when that paper term is enabled.
+            if c_i == CLASS_UNKNOWN:
+                class_cost = (-float(torch.logsumexp(
+                    log_probabilities[j, [CLASS_DOWNBEAT, CLASS_BEAT]], dim=0))
+                    if criterion.match_event_cost else 0.0)
+            else:
+                class_cost = -float(log_probabilities[j, c_i])
             l_match[i, j] = class_cost + criterion.lambda_l1 * abs(float(t_hat[j] - t_i))
 
     return l_match
@@ -34,7 +39,8 @@ def l_match_loop(criterion, log_probabilities, t_hat, gt_class, gt_time):
 
 @pytest.mark.parametrize("kind", list(LABELS))
 @pytest.mark.parametrize("seed", [0, 1, 2])
-def test_matches_the_double_loop(kind, seed):
+@pytest.mark.parametrize("match_event_cost", [False, True])
+def test_matches_the_double_loop(kind, seed, match_event_cost):
     g = torch.Generator().manual_seed(seed)
     log_probabilities = torch.log_softmax(
         torch.randn(25, 3, generator=g, dtype=torch.float64) * 3, dim=-1)
@@ -42,7 +48,8 @@ def test_matches_the_double_loop(kind, seed):
     gt_time = torch.sort(torch.rand(8, generator=g, dtype=torch.float64)).values
     gt_class = torch.tensor(LABELS[kind])
 
-    criterion = SubsetCriterion(DATA_PRIOR, WINDOW_SECONDS, meter_prior={4: 1.0})
+    criterion = SubsetCriterion(DATA_PRIOR, WINDOW_SECONDS, meter_prior={4: 1.0},
+                                match_event_cost=match_event_cost)
     got = criterion.build_l_match(log_probabilities, t_hat, gt_class, gt_time)
     want = l_match_loop(criterion, log_probabilities, t_hat, gt_class, gt_time)
 
