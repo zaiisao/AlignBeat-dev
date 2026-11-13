@@ -99,7 +99,7 @@ class SubsetCriterion(nn.Module):
         else:
             unlabelled_class_loss_matrix = torch.zeros_like(labelled_class_loss_matrix)
 
-        class_loss_matrix = torch.where(labelled[:, None], 
+        class_loss_matrix = torch.where(labelled[:, None],
                                         labelled_class_loss_matrix,
                                         unlabelled_class_loss_matrix)
 
@@ -136,7 +136,7 @@ class SubsetCriterion(nn.Module):
                     pi = flat / flat.sum()
 
             return Match(sigma, pi)
-            
+
 
     def _class_term(self, matched_class_probs, gt_class, match):
         """Algorithm 2 lines 49-53's cls(theta; ind), branched on the indicator.

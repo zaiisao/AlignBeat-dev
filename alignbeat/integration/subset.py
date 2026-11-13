@@ -120,4 +120,3 @@ def subset_predict_piece(model, criterion, batch, chunk_size, fps, *, detect_tau
     seconds = (frames_of_fragments / fps).detach().cpu().numpy()
     classes = classes.detach().cpu().numpy()
     return (seconds,), (seconds[classes == CLASS_DOWNBEAT],)
-
