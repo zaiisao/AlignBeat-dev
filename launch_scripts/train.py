@@ -1,6 +1,13 @@
 import argparse
 import os
 from pathlib import Path
+import sys
+
+# Direct script execution otherwise searches launch_scripts/ before the repository
+# root and can import an unrelated installed Beat This package.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import torch
 

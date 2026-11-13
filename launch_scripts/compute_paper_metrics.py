@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
+import sys
+
+# Running this file directly puts launch_scripts/, not the repository root, at the
+# front of sys.path. Prefer this fork's Beat This package over any installed upstream
+# copy that may also be present in the environment.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 from pytorch_lightning import Trainer, seed_everything
