@@ -13,34 +13,6 @@ annotations can contribute to training while the downbeat labels are unobserved.
 Some equation and algorithm references in source comments use the numbering of
 earlier working drafts and may differ from the linked preprint.
 
-## Code layout
-
-This repository is a fork of [Beat This!](https://github.com/CPJKU/beat_this)
-(Foscarin et al., 2024). Its original implementation remains in `beat_this/`.
-The frontend, transformer blocks, augmentation, optimizer, and metric functions
-are reused. Three upstream files connect the AlignBeat additions:
-
-| path | role |
-| --- | --- |
-| `beat_this/model/beat_tracker.py` | selects `SubsetHead` after the existing frontend and transformer blocks |
-| `beat_this/model/pl_module.py` | calls AlignBeat's loss and decoding from the Lightning training and prediction methods |
-| `beat_this/dataset/dataset.py` | adds each piece's beat period to the existing dataset item |
-| `alignbeat/model/head.py` | shared trunk, classification branch, and time-regression branch |
-| `alignbeat/model/downsample.py` | reduces transformer frames to candidate features |
-| `alignbeat/training/criterion.py` | matching costs and classification, timing, and background losses |
-| `alignbeat/training/dp.py` | ordered candidate matching and related dynamic-programming routines |
-| `alignbeat/training/priors.py` | training-split statistics and annotation-coverage options |
-| `alignbeat/inference/decode.py` | converts candidates into beat and downbeat events |
-| `alignbeat/inference/stitching.py` | combines predictions from overlapping fragments |
-| `alignbeat/integration/config.py` | routes saved head, loss, and decoding settings |
-| `alignbeat/integration/subset.py` | constructs event targets and connects the loss and decoder to `PLBeatThis` |
-
-The main entry points remain `launch_scripts/train.py`,
-`launch_scripts/preprocess_audio.py`, and `launch_scripts/compute_paper_metrics.py`.
-The evaluation script includes AlignBeat checkpoint handling and downbeat metric
-aggregation over pieces that have downbeat annotations. Paper-generation scripts
-are not included.
-
 ## Setup and data
 
 Use Python 3.10 or newer. Install PyTorch and torchaudio for your platform, then
@@ -65,17 +37,10 @@ uses its `8-folds.split` files; `--fold N` selects the held-out fold.
 
 ## Training
 
-Run commands from the repository root. These examples use the default 1500-frame
-window at 50 frames per second (30 seconds).
-
-```sh
-# AlignBeat and the dense Beat This! baseline
-python launch_scripts/train.py --name alignbeat_f0 --fold 0
-python launch_scripts/train.py --name dense_f0 --head_type dense --fold 0
-```
-
-To initialize the frontend and transformer from Beat This!'s released checkpoint
-for the same fold:
+Run commands from the repository root. The paper initializes each fold's encoder
+from the matching released Beat This! checkpoint, then trains AlignBeat for 20 epochs.
+This example reproduces fold 0, using the default 1500-frame window at 50 frames per
+second (30 seconds):
 
 ```sh
 mkdir -p checkpoints
@@ -84,6 +49,10 @@ curl -L https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/fold0.ckpt 
 python launch_scripts/train.py --name alignbeat_f0 --fold 0 \
     --init_encoder_from checkpoints/beat-this-fold0.ckpt
 ```
+
+For another cross-validation fold, download its matching `foldN.ckpt` and pass that
+checkpoint with `--fold N`. The encoder is fine-tuned together with the AlignBeat
+heads. To train the dense Beat This! baseline instead, use `--head_type dense`.
 
 The current training CLI exposes the following settings. These are its defaults,
 not a claim that every historical checkpoint used the same configuration.
