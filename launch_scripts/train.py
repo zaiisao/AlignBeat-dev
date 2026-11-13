@@ -47,7 +47,7 @@ def main(args):
         else:
             wandb_args = {}
         logger = WandbLogger(
-            project="beat_this", name=f"{args.name} {params_str}".strip(), **wandb_args
+            project="alignbeat", name=f"{args.name} {params_str}".strip(), **wandb_args
         )
     else:
         logger = None
